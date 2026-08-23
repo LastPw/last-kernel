@@ -928,6 +928,8 @@ test:
 	awk '/^\/\* ==================== AES-128 Implementation/,/^\/\* ==================== PBKDF2/' kernel/security/fde.c | head -n -2 > $(BUILD_DIR)/tests/fde_aes_core.inc
 	gcc -O1 -Wall -Wextra -I$(BUILD_DIR)/tests -o $(BUILD_DIR)/tests/fde_aes_kat tests/fde_aes_kat.c
 	./$(BUILD_DIR)/tests/fde_aes_kat
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/lastfs_tests tests/lastfs_tests.c
+	./$(BUILD_DIR)/tests/lastfs_tests
 
 qemu: $(BUILD_DIR)/lastkernel.iso
 	qemu-system-x86_64 -cdrom $(BUILD_DIR)/lastkernel.iso -m 512M -serial stdio
