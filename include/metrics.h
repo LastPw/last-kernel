@@ -1,0 +1,117 @@
+#ifndef METRICS_H
+#define METRICS_H
+
+#include "types.h"
+
+#define METRICS_MAX_CORES 8
+
+typedef struct {
+    u32 ram_bytes;
+    u32 ticks;
+    u32 timer_hz;
+    u32 irq_count;
+    u32 core_count;
+    u32 cpu_usage_percent[METRICS_MAX_CORES];
+    u32 context_switches;
+    u32 task_count;
+    u32 scheduler_quantum_level;
+    u32 scheduler_quantum_ticks;
+    u32 ukernel_mode;
+    u32 ukernel_perf_score;
+    u32 ukernel_risk_score;
+    u32 ukernel_thermal_score;
+    u32 ukernel_memory_pressure;
+    u32 ukernel_network_pressure;
+    u32 ukernel_latency_shadow;
+    u32 ukernel_lockdown;
+    u32 ukernel_self_heal_actions;
+    u32 pcoe_mode;
+    u32 pcoe_prs_score;
+    u32 pcoe_dmca_score;
+    u32 pcoe_ghost_score;
+    u32 pcoe_ai_sched_score;
+    u32 pcoe_clroe_score;
+    u32 pcoe_security_sandbox_score;
+    u32 pcoe_hybrid_mode_score;
+    u32 pcoe_ghost_gpu_score;
+    u32 pcoe_energy_thermal_score;
+    u32 pcoe_learning_score;
+    u32 pcoe_quantum_predictive_score;
+    u32 pcoe_core_anomaly_score;
+    u32 pcoe_core_stability_score;
+    u32 pcoe_core_predicted_pressure;
+    u32 pcoe_hyper_ghost_pressure;
+    u32 pcoe_hyper_ghost_latency_shadow;
+    u32 pcoe_hyper_ghost_reserved_kb;
+    u32 pcoe_hyper_ghost_hot_pool_kb;
+    u32 pcoe_hyper_ghost_warm_pool_kb;
+    u32 pcoe_hyper_ghost_cold_pool_kb;
+    u32 pcoe_hyper_ghost_shadow_pages;
+    u32 pcoe_hyper_ghost_compression_permille;
+    u32 pcoe_hyper_ghost_dedup_permille;
+    u32 pcoe_hyper_ghost_reclaim_events;
+    u32 pcoe_hyper_ghost_rebalance_events;
+    u32 pcoe_quantum_score;
+    u32 pcoe_quantum_pressure;
+    u32 pcoe_quantum_anomaly;
+    u32 pcoe_quantum_stability;
+    u32 pcoe_quantum_preempt_hint;
+    u32 pcoe_quantum_throughput_gain;
+    u32 pcoe_quantum_fairness_index;
+    u32 pcoe_quantum_predicted_threads;
+    u32 pcoe_quantum_dependency_depth;
+    u32 pcoe_quantum_clone_level;
+    u32 pcoe_quantum_micro_thread_level;
+    u32 pcoe_latency_shadow;
+    u32 pcoe_quantum_level;
+    u32 pcoe_dependency_depth;
+    u32 pcoe_clone_level;
+    u32 pcoe_micro_thread_level;
+    u32 pcoe_preload_level;
+    u32 pcoe_security_pressure;
+    u32 watchdog_stalls;
+    u32 watchdog_heap_faults;
+    u32 watchdog_vm_oom_spikes;
+    u32 watchdog_mitigation_actions;
+    u32 watchdog_healthy;
+    u32 paniclog_count;
+    u32 compat_enabled;
+    u32 compat_tracked_processes;
+    u32 compat_fast_hits;
+    u32 compat_slow_hits;
+    u32 compat_abi_conflicts;
+    u32 compat_astg_promotions;
+    u32 compat_quarantined_profiles;
+    u32 compat_cache_entries;
+    u32 vm_active_regions;
+    u32 vm_total_faults;
+    u32 vm_handled_faults;
+    u32 vm_protection_faults;
+    u32 vm_guard_faults;
+    u32 vm_oom_faults;
+    u32 vm_committed_pages;
+    u32 frames_total;
+    u32 frames_used;
+    u32 heap_used;
+    u32 heap_peak;
+    u32 heap_corruptions;
+    u32 heap_fragmentation;
+    u32 audit_violations;
+    u32 security_score;
+    u32 threat_count;
+    u32 blocked_tasks;
+    u32 swap_used_kb;
+    u32 io_ops_total;
+    u32 io_queue_depth;
+    u32 net_packets;
+    u32 oom_kills;
+    u32 power_mode;
+    u8 nx_active;
+    u8 smep_active;
+    u8 smap_active;
+} kernel_metrics_t;
+
+void metrics_init(u32 ram_bytes);
+void metrics_snapshot(kernel_metrics_t* out);
+
+#endif
