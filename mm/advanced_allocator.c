@@ -2,6 +2,7 @@
 #include "slab.h"
 #include "heap.h"
 #include "frame_allocator.h"
+#include "paging.h"
 
 #define ADV_TAG_SLAB 0x534C4142u
 #define ADV_TAG_HEAP 0x48454150u

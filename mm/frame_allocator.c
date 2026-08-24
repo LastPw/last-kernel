@@ -25,12 +25,12 @@ extern u64 g_kernel_phys_base;
 
 #define FRAME_DMA32_TOP 0x100000000ull /* 4 GiB bus-address boundary */
 
-/* Trackable-frame ceiling: matches the 4 GiB identity-mapped window that
-   the physical-pointer contract depends on (1M frames).  Raising both this
-   and FA_IDENTITY_CEILING together is a one-line change costing 9 B/frame
-   of .bss; anything above 4 GiB needs the HHDM pointer-contract migration
-   first (see README roadmap). */
-#define MAX_FRAMES 1048576u
+/* Pool span target: 512 GiB.  Returned values remain PHYSICAL addresses;
+ * every consumer accesses frame contents through the HHDM alias
+ * (paging_phys_to_virt), which Limine maps for ALL usable RAM -- so there
+ * is no identity-window cap any more. */
+#define FA_MAX_SPAN (512ull * 1024ull * 1024ull * 1024ll * 0x1ull)
+#define FA_META_PER_FRAME 9u /* next(4)+order(1)+free(1)+ref(2)+meta(1) */
 
 /* ── physical usable regions (from bootinfo parse) ────────────────────── */
 #define FRAME_MAX_REGIONS 16u
@@ -49,12 +49,13 @@ static u32 used_frames_count = 0u;
 static u64 g_first_pa = 0;         /* phys addr encoded by pfn 0 */
 static u64 g_tracked_bytes = 0;
 
-/* ── per-frame metadata (.bss-backed, sized by MAX_FRAMES) ────────────── */
-static u32 next_idx[MAX_FRAMES];
-static u8  block_order[MAX_FRAMES];
-static u8  block_free[MAX_FRAMES];
-static u16 frame_refcount[MAX_FRAMES];
-static u8  frame_meta[MAX_FRAMES];
+/* ── per-frame metadata (carved from the top of the largest RAM region,
+   accessed through the HHDM alias; sized exactly to tracked frames) ────── */
+static u32* next_idx;
+static u8*  block_order;
+static u8*  block_free;
+static u16* frame_refcount;
+static u8*  frame_meta;
 
 static spinlock_t g_frame_lock;
 
@@ -184,92 +185,195 @@ static void free_block_raw(u32 idx, u8 order) {
 /* ── init ─────────────────────────────────────────────────────────────── */
 
 void frame_allocator_init(u64 ram_bytes) {
-    (void)ram_bytes;
-    const u32 meta_frames_cap = MAX_FRAMES;
+    (void)ram_bytes; /* capacity comes from the bootloader region table */
 
-    /* Flat pool over [lowest usable base, +trackable bytes).
-       Mirrors the historical model the rest of the kernel expects
-       (ascending physical frames, identity-accessible), but sized in
-       64-bit and bounded only by the metadata budget. */
-    u64 lowest = 0ull;
-    u64 usable_total = 0ull;
-    int have_lowest = 0;
-    for (u32 i = 0; i < g_boot_region_count; i++) {
+    /* 1) Collect pool-eligible regions (Limine-fork types: usable=0,
+          kernel-and-modules=6), clip to [1 MiB, FA_MAX_SPAN], sort by base. */
+    fa_region_t tmp[FRAME_MAX_REGIONS];
+    u32 ntmp = 0u;
+    u64 span_top = FA_MAX_SPAN;
+
+    for (u32 i = 0; i < g_boot_region_count && ntmp < FRAME_MAX_REGIONS; i++) {
         u64 b = g_boot_regions[i].base;
         u64 l = g_boot_regions[i].len;
         if (l < FRAME_SIZE) continue;
-        usable_total += l;
-        if (!have_lowest || b < lowest) { lowest = b; have_lowest = 1; }
+        if (b < FRAME_SIZE) {                     /* 1 MiB floor */
+            u64 drop = FRAME_SIZE - b;
+            if (drop >= l) continue;
+            b = FRAME_SIZE; l -= drop;
+        }
+        if (b >= span_top) continue;
+        if (b + l > span_top) l = span_top - b;
+        tmp[ntmp].base_pa = b;
+        tmp[ntmp].len = l;
+        tmp[ntmp].first_pfn = 0u;
+        tmp[ntmp].frame_count = 0u;
+        ntmp++;
     }
-    if (!have_lowest) { lowest = 0x100000ull; usable_total = 64ull * 1024ull * 1024ull; }
+    /* insertion sort by base */
+    for (u32 i = 1; i < ntmp; i++) {
+        fa_region_t key = tmp[i];
+        u32 j = i;
+        while (j > 0u && tmp[j - 1u].base_pa > key.base_pa) {
+            tmp[j] = tmp[j - 1u];
+            j--;
+        }
+        tmp[j] = key;
+    }
 
-    /* Historical invariant: the pool starts at 1 MiB -- below that lives
-       real-mode IVT/BDA and bootloader low structures the kernel must not
-       hand out.  Ceiling: the first 4 GiB identity mapping (paging.c keeps
-       it alive) -- returning frames above that would break the
-       physical-pointer contract every pre-existing caller relies on. */
-    const u64 FA_FLOOR = 0x100000ull;              /* 1 MiB */
-    const u64 FA_IDENTITY_CEILING = 0x100000000ull;/* 4 GiB */
-    if (lowest < FA_FLOOR) lowest = FA_FLOOR;
+    /* 2) Metadata sizing. */
+    u64 raw_frames = 0u;
+    for (u32 r = 0; r < ntmp; r++) raw_frames += tmp[r].len / FRAME_SIZE;
+    u32 frames = (u32)(raw_frames > (u32)-1 ? (u32)-1 : raw_frames);
+    u64 meta_bytes = ((u64)frames * FA_META_PER_FRAME + FRAME_SIZE - 1ull)
+                     & ~(u64)(FRAME_SIZE - 1ull);
 
-    u64 top = lowest + usable_total;
-    if (top > FA_IDENTITY_CEILING) top = FA_IDENTITY_CEILING;
-    if (top <= lowest) { lowest = FA_FLOOR; top = FA_FLOOR + 64ull * 1024ull * 1024ull; }
+    if (g_hhdm_offset == 0ull) {
+        serial_writeln("[fa] FATAL: no HHDM offset from bootloader");
+        return;
+    }
 
-    g_first_pa = lowest & ~(u64)(FRAME_SIZE - 1ull);
-    u64 want_frames = (top - g_first_pa) / FRAME_SIZE;
-    if (want_frames > meta_frames_cap) want_frames = meta_frames_cap;
-
-    /* Kernel image + .heap live inside the eligible span (Limine labels it
-       KERNEL_AND_MODULES): exclude that range from the free pool. */
-    extern u8 __heap_end[];
-    extern u8 __kernel_end[];
-    /* Link-relative image size: immune to whatever virtual base the
-       bootloader reports. */
-    u64 img_span = (u64)((uintptr_t)__heap_end - (uintptr_t)__kernel_end);
-    if (img_span == 0ull || img_span > 0xC0000000ull) img_span = 0ull; /* sane guard */
-    u64 img_lo = g_kernel_phys_base;
-    u64 img_hi = img_span ? (img_lo + img_span) : 0ull;
-    if (img_lo == 0ull || img_lo >= FRAME_DMA32_TOP) { img_lo = 0ull; img_hi = 0ull; }
-
-    g_region_count = 1u;
-    g_reg[0].base_pa = g_first_pa;
-    g_reg[0].len = want_frames * FRAME_SIZE;
-    g_reg[0].first_pfn = 0u;
-    g_reg[0].frame_count = (u32)want_frames;
-
-    /* Split around the kernel image: two sub-ranges if it lands mid-pool. */
-    total_frames_count = (u32)want_frames;
-    g_tracked_bytes = want_frames * FRAME_SIZE;
-    if (g_region_count < FRAME_MAX_REGIONS &&
-        img_hi > g_reg[0].base_pa && img_lo < g_reg[0].base_pa + g_reg[0].len) {
-        u64 img_lo_al = (img_lo + FRAME_SIZE - 1ull) & ~(u64)(FRAME_SIZE - 1ull);
-        u64 img_hi_al = img_hi & ~(u64)(FRAME_SIZE - 1ull);
-        if (img_hi_al > img_lo_al) {
-            u32 pre_frames = (u32)((img_lo_al - g_reg[0].base_pa) / FRAME_SIZE);
-            u32 post_start_pfn = (u32)((img_hi_al - g_first_pa) / FRAME_SIZE);
-            if (post_start_pfn < total_frames_count && pre_frames <= total_frames_count) {
-                u32 post_frames = g_reg[0].frame_count - post_start_pfn;
-                g_reg[0].frame_count = pre_frames;
-                g_reg[0].len = (u64)pre_frames * FRAME_SIZE;
-
-                g_reg[1].base_pa = img_hi_al;
-                g_reg[1].len = (u64)post_frames * FRAME_SIZE;
-                g_reg[1].first_pfn = post_start_pfn;
-                g_reg[1].frame_count = post_frames;
-                g_region_count = 2u;
+    /* Discover the bootloader's live page-table pages by walking CR3:
+       this kernel never replaces CR3, so those pages stay in use even
+       though the fork labels their whole span "reclaimable".  They are
+       excluded from both the metadata carve and the free pools. */
+    static u64 tbl_pa[8192];
+    u32 tbl_n = 0u;
+    {
+        u64 cr3 = 0ull;
+        __asm__ __volatile__("mov %%cr3, %0" : "=r"(cr3));
+        cr3 &= 0x000FFFFFFFFFF000ull;
+        tbl_pa[tbl_n++] = cr3;
+        u64* pml4 = (u64*)(cr3 + g_hhdm_offset);
+        for (u32 i = 0; i < 512 && tbl_n < 8192u; i++) {
+            if (!(pml4[i] & 1ull)) continue;
+            u64 pdpt_pa = pml4[i] & 0x000FFFFFFFFFF000ull;
+            tbl_pa[tbl_n++] = pdpt_pa;
+            u64* pdpt = (u64*)(pdpt_pa + g_hhdm_offset);
+            for (u32 j = 0; j < 512 && tbl_n < 8192u; j++) {
+                u64 e = pdpt[j];
+                if (!(e & 1ull) || (e & 0x80ull)) continue;   /* absent / 1G leaf */
+                u64 pd_pa = e & 0x000FFFFFFFFFF000ull;
+                tbl_pa[tbl_n++] = pd_pa;
+                u64* pd = (u64*)(pd_pa + g_hhdm_offset);
+                for (u32 k = 0; k < 512 && tbl_n < 8192u; k++) {
+                    u64 e2 = pd[k];
+                    if (!(e2 & 1ull) || (e2 & 0x80ull)) continue; /* 2M leaf */
+                    tbl_pa[tbl_n++] = e2 & 0x000FFFFFFFFFF000ull;
+                }
             }
         }
     }
 
-    used_frames_count = total_frames_count;
+    /* Metadata carve site: lowest span >= meta_bytes that avoids the
+       kernel image and every discovered page-table page.  The chosen
+       region is split around the carve in the region list. */
+    extern u8 __heap_end[];
+    extern u8 __kernel_end[];
+    u64 img_span = (u64)((uintptr_t)__heap_end - (uintptr_t)__kernel_end);
+    if (img_span > 0xC0000000ull) img_span = 0ull;
+    u64 img_lo = g_kernel_phys_base;
+    u64 img_hi = img_span ? (img_lo + img_span) : 0ull;
 
-    serial_writeln("[fa] sized");
+    int placed = 0;
+    u64 carve_pa = 0ull;
+    fa_region_t rebuilt[FRAME_MAX_REGIONS + 2u];
+    u32 rn = 0u;
+    for (u32 r = 0; r < ntmp && !placed; r++) {
+        u64 lo = tmp[r].base_pa;
+        u64 hi = tmp[r].base_pa + tmp[r].len;
+        u64 cur = (lo + FRAME_SIZE - 1ull) & ~(u64)(FRAME_SIZE - 1ull);
+        while (cur + meta_bytes <= hi) {
+            int clash = 0;
+            if (img_hi != 0ull && cur < img_hi && cur + meta_bytes > img_lo) clash = 1;
+            if (!clash) {
+                for (u32 t = 0; t < tbl_n; t++) {
+                    if (cur < tbl_pa[t] + FRAME_SIZE &&
+                        cur + meta_bytes > tbl_pa[t]) { clash = 1; break; }
+                }
+            }
+            if (!clash) { carve_pa = cur; break; }
+            cur += FRAME_SIZE;
+        }
+        if (carve_pa && !placed) {
+            u64 tail_lo = carve_pa + meta_bytes;
+            for (u32 q = 0; q < ntmp; q++) {
+                if (q == r) {
+                    if (carve_pa > tmp[q].base_pa) {
+                        rebuilt[rn].base_pa = tmp[q].base_pa;
+                        rebuilt[rn].len = carve_pa - tmp[q].base_pa;
+                        rebuilt[rn].first_pfn = 0u;
+                        rebuilt[rn].frame_count = 0u;
+                        rn++;
+                    }
+                    if (tail_lo < hi) {
+                        rebuilt[rn].base_pa = tail_lo;
+                        rebuilt[rn].len = hi - tail_lo;
+                        rebuilt[rn].first_pfn = 0u;
+                        rebuilt[rn].frame_count = 0u;
+                        rn++;
+                    }
+                } else {
+                    rebuilt[rn++] = tmp[q];
+                }
+            }
+            placed = 1;
+        }
+    }
+    if (!placed) {
+        serial_writeln("[fa] FATAL: no safe metadata carve site");
+        return;
+    }
+    for (u32 q = 0; q < rn; q++) tmp[q] = rebuilt[q];
+    ntmp = rn;
+
+    next_idx       = (u32*)(carve_pa + g_hhdm_offset);
+    block_order    = (u8*)(next_idx + frames);
+    block_free     = block_order + frames;
+    frame_refcount = (u16*)(block_free + frames);
+    frame_meta     = (u8*)(frame_refcount + frames);
+    {
+        /* carved RAM is not guaranteed zeroed */
+        volatile u8* mva = (volatile u8*)(carve_pa + g_hhdm_offset);
+        u32 bytes = (u32)(meta_bytes);
+        for (u32 i = 0; i < bytes; i++) mva[i] = 0u;
+    }
+
+    /* 3) Publish regions with cumulative global pfns; exclude kernel image
+       and bootloader page-table pages (img_lo/img_hi/tbl_* from above). */
+
+    g_region_count = 0u;
+    total_frames_count = 0u;
+    g_first_pa = ntmp ? tmp[0].base_pa : 0ull;
+    used_frames_count = 0u;
+
+    for (u32 r = 0; r < ntmp; r++) {
+        u32 first = (u32)((tmp[r].base_pa - g_first_pa) / FRAME_SIZE);
+        u32 cnt = (u32)(tmp[r].len / FRAME_SIZE);
+
+        /* Frames covered by the kernel image are accounted as used. */
+        u32 skipped = 0u;
+        if (img_hi != 0ull) {
+            u32 s_lo = (u32)(((img_lo + FRAME_SIZE - 1ull) - g_first_pa) / FRAME_SIZE);
+            u32 s_hi = (u32)(((img_hi & ~(u64)(FRAME_SIZE - 1ull)) - g_first_pa) / FRAME_SIZE);
+            for (u32 p = first; p < first + cnt; p++) {
+                if (p >= s_lo && p < s_hi) skipped++;
+            }
+            if (skipped > cnt) skipped = cnt;
+        }
+
+        tmp[r].first_pfn = first;
+        tmp[r].frame_count = cnt;
+        g_reg[g_region_count++] = tmp[r];
+        total_frames_count += cnt;
+        used_frames_count += skipped;
+        g_tracked_bytes += (u64)cnt * FRAME_SIZE;
+    }
+
     for (u32 o = 0u; o <= MAX_ORDER; o++) free_head[o] = INVALID_IDX;
     bootstrap_free_space();
-    serial_writeln("[fa] seeded");
 
-    /* Reclaim accounting: everything seeded counts as free. */
+    /* Recount free frames to derive the true used baseline. */
     {
         u32 free_frames = 0u;
         for (u8 o = 0u; o <= MAX_ORDER; o++) {
@@ -288,10 +392,8 @@ void frame_allocator_init(u64 ram_bytes) {
     serial_write_dec(g_region_count);
     serial_write(" frames=");
     serial_write_dec(total_frames_count);
-    serial_write(" tracked_bytes_hi=");
-    serial_write_dec((u32)(g_tracked_bytes >> 32));
-    serial_write(" lo=");
-    serial_write_dec((u32)(g_tracked_bytes & 0xFFFFFFFFu));
+    serial_write(" gib_x100=");
+    serial_write_dec((u32)((g_tracked_bytes * 100ull) >> 30));
     serial_putc('\n');
 }
 
@@ -308,8 +410,8 @@ static void* alloc_from(u8 order, int require_dma32) {
         u32 cur = free_head[cur_order];
         while (cur != INVALID_IDX) {
             if (!require_dma32) { idx = cur; break; }
-            const fa_region_t* r = region_of(cur);
-            if (r && r->base_pa + (u64)r->frame_count * FRAME_SIZE <= FRAME_DMA32_TOP) {
+            /* block must sit entirely below the 4 GiB bus boundary */
+            if (((u64)cur + order_size(cur_order)) * FRAME_SIZE <= FRAME_DMA32_TOP) {
                 idx = cur;
                 break;
             }

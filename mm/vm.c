@@ -39,7 +39,7 @@ static vm_region_t g_regions[VM_MAX_REGIONS];
 static vm_stats_t g_stats;
 static u32 g_next_region_id = 1u;
 static u32 g_total_ram = 0u;
-static u32 g_zero_frame = VM_NULL_FRAME;
+static u64 g_zero_frame = VM_NULL_FRAME;
 
 static u32 align_down(u32 v, u32 a) {
     return v & ~(a - 1u);
