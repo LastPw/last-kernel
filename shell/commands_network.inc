@@ -92,6 +92,7 @@ static void cmd_vpn(const char* args) {
         kputs(" rx_pkts="); print_u32((u32)st.rx_packets);
         kputs("\nreplay_drops="); print_u32(st.replay_drops);
         kputs(" auth_failures="); print_u32(st.auth_failures);
+        kputs(" route_drops="); print_u32(st.tx_route_drops);
         kputc('\n');
         return;
     }

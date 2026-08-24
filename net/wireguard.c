@@ -4,6 +4,8 @@
 
 #include "wireguard.h"
 #include "noise_ik.h"
+#include "ethernet.h"
+#include "ip.h"
 #include "udp_raw.h"
 #include "netstack.h"
 #include "entropy.h"
@@ -70,8 +72,11 @@ typedef struct {
     u32 handshake_count;
     u32 replay_drops;
     u32 auth_failures;
+    u32 tx_route_drops;
     u8 role_last_handshake;
 } wg_state_t;
+
+#define WG_TUNNEL_MTU 1400u
 
 static wg_state_t g_wg;
 
@@ -312,16 +317,53 @@ static void handle_transport_data(const u8* data, u16 len) {
     s->last_rx_tick = timer_ticks();
     g_wg.rx_packets++;
 
-    if (plain_len > 0u) {
-        serial_write("[WIREGUARD] decrypted ");
-        serial_write_dec((u32)plain_len);
-        serial_writeln(" bytes from peer");
+    if (plain_len >= sizeof(ipv4_header_t)) {
+        /* inner payload is an IPv4 datagram: inject into the stack.
+         * zero MAC: decapsulated packets bypass ARP learning. */
+        static const u8 zero_mac[6] = { 0 };
+        netstack_ipv4_input(zero_mac, buf, (u16)plain_len);
+        serial_writeln("[WIREGUARD] tunneled datagram injected");
     } else {
-        /* keepalive: reply in kind to keep NAT mappings alive both ways */
-        if ((u32)(timer_ticks() - s->last_tx_tick) >= WG_KEEPALIVE_TICKS) {
-            (void)wireguard_send_data(0, 0);
-        }
+        serial_writeln("[WIREGUARD] keepalive received");
     }
+}
+
+/* ---------------- outbound tunnel interception ---------------- */
+
+int wireguard_intercept_outbound(const u8* frame, u16 len) {
+    static u8 inner_tx = 0u;
+    const eth_header_t* eth;
+    const ipv4_header_t* iph;
+    u32 dst;
+
+    if (!g_wg.configured || !g_wg.session.valid || frame == 0 || inner_tx) {
+        return 0;
+    }
+    if (len < (u16)(sizeof(eth_header_t) + sizeof(ipv4_header_t))) {
+        return 0;
+    }
+    eth = (const eth_header_t*)frame;
+    if (ip_htons(eth->ethertype) != ETH_TYPE_IPV4) {
+        return 0;
+    }
+    iph = (const ipv4_header_t*)(frame + sizeof(eth_header_t));
+    dst = ip_htonl(iph->dst_ip);
+    if ((dst & g_wg.allowed_mask) != g_wg.allowed_net || dst == g_wg.endpoint_ip) {
+        return 0;
+    }
+
+    u16 l3_len = (u16)(len - sizeof(eth_header_t));
+    if (l3_len > WG_TUNNEL_MTU) {
+        g_wg.tx_route_drops++;
+        return 1; /* policy: never leak allowed-net traffic in the clear */
+    }
+    inner_tx = 1u;
+    int rc = wireguard_send_data(frame + sizeof(eth_header_t), l3_len);
+    inner_tx = 0u;
+    if (rc != 0) {
+        g_wg.tx_route_drops++;
+    }
+    return 1;
 }
 
 /* ---------------- public API ---------------- */
@@ -411,6 +453,7 @@ void wireguard_status(wireguard_status_t* out) {
     out->handshake_count = g_wg.handshake_count;
     out->replay_drops = g_wg.replay_drops;
     out->auth_failures = g_wg.auth_failures;
+    out->tx_route_drops = g_wg.tx_route_drops;
     out->last_handshake_tick = g_wg.session.established_tick;
 }
 

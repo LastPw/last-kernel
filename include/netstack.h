@@ -73,6 +73,9 @@ void netstack_init(void);
 void netstack_tick(void);
 void netstack_poll(u32 budget);
 void netstack_on_frame(const u8* frame, u16 len);
+/* Inject a raw IPv4 datagram (no Ethernet header) — used by the
+ * WireGuard decapsulator. Bypasses NAT forwarding. */
+void netstack_ipv4_input(const u8 src_mac[6], const u8* datagram, u16 dgram_len);
 void netstack_set_local(u32 ip, u32 mask, u32 gateway);
 int netstack_ipv6_local(u8 out_addr[16]);
 int netstack_ipv6_ping(const u8 remote[16], u16 sequence, u32 timeout_ticks, u32* out_ticks);

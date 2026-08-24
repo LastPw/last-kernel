@@ -38,6 +38,7 @@
 
 ### Network Stack
 - Ethernet II, ARP, IPv4, IPv6 (+ NDP), ICMP/ICMPv6.
+- **WireGuard IP-layer tunneling**: IPv4 datagrams bound for the configured allowed network are automatically encapsulated into the tunnel at the frame-emission choke point; decapsulated peer datagrams are injected back into the stack. Allowed-network traffic is never leaked in the clear (oversized frames are dropped and counted).
 - Basic TCP state machine (`net/tcp_raw.c`) and UDP.
 - DHCP client + server, DNS resolver + server, NAT engine.
 - In-kernel HTTP/TLS server on vendored **BearSSL** (`crypto/bearssl/`) with real embedded trust anchors.
@@ -59,7 +60,7 @@
 ---
 
 ## Partial / Known Limitations
-- **WireGuard**: message-oriented data API + shell (`vpn` command); no IP-layer tunnel routing yet, no mac2/cookie replies under load, no roaming, single peer.
+- **WireGuard**: no mac2/cookie replies under load, no roaming, single peer, 1400-byte inner MTU. End-to-end tunneling between two VMs is wired but not yet exercised in CI.
 - **TCP** is minimal: no retransmission timers or sliding window yet.
 - **TPM2** (`kernel/security/tpm2.c`): real SHA-256 seal/unseal logic, but no TIS hardware I/O — PCR values are software-derived.
 - **Antivirus scanner**: real scanning/quarantine plumbing, toy signature set.
@@ -67,7 +68,6 @@
 - **Linux compat**: syscall translation surface only; no dynamic-linker support.
 
 ## Not Implemented (roadmap)
-- WireGuard IP-layer tunneling (route allowed-network packets through the session).
 - Robust TCP (retransmit, congestion control).
 - eBPF, kprobes, io_uring (removed as non-functional stubs; to be reimplemented properly or not at all).
 - ACPI power management, hotplug.

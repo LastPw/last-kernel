@@ -664,225 +664,236 @@ void netstack_on_frame(const u8* frame, u16 len) {
         }
         return;
     }
-    if (et != ETH_TYPE_IPV4) {
-        return;
+    if (et == ETH_TYPE_IPV4) {
+        netstack_ipv4_input(eth->src, frame + sizeof(eth_header_t),
+                            (u16)(len - sizeof(eth_header_t)));
     }
+}
+
+/* IPv4 datagram entry point shared by the NIC frame path and the
+ * WireGuard decapsulator. */
+static void ipv4_input_ex(const u8 src_mac[6], const u8* l3, u16 l3_len,
+                          const u8* frame, u16 frame_len);
+
+void netstack_ipv4_input(const u8 src_mac[6], const u8* datagram, u16 dgram_len) {
     g_st.ipv4_rx++;
+    ipv4_input_ex(src_mac, datagram, dgram_len, 0, 0u);
+}
 
-    const u8* l3 = frame + sizeof(eth_header_t);
-    u16 l3_len = (u16)(len - sizeof(eth_header_t));
-    if (l3_len < sizeof(ipv4_header_t)) {
-        log_malformed(101, l3_len);
-        return;
-    }
+static void ipv4_input_ex(const u8 src_mac[6], const u8* l3, u16 l3_len,
+                          const u8* frame, u16 frame_len) {
+if (l3_len < sizeof(ipv4_header_t)) {
+    log_malformed(101, l3_len);
+    return;
+}
 
-    const ipv4_header_t* ip = (const ipv4_header_t*)l3;
-    u8 version = (u8)(ip->ver_ihl >> 4);
-    u8 ihl_words = (u8)(ip->ver_ihl & 0x0F);
-    u16 ihl = (u16)(ihl_words * 4u);
-    if (version != 4 || ihl < sizeof(ipv4_header_t) || ihl > l3_len) {
-        log_malformed(102, ip->ver_ihl);
-        return;
-    }
+const ipv4_header_t* ip = (const ipv4_header_t*)l3;
+u8 version = (u8)(ip->ver_ihl >> 4);
+u8 ihl_words = (u8)(ip->ver_ihl & 0x0F);
+u16 ihl = (u16)(ihl_words * 4u);
+if (version != 4 || ihl < sizeof(ipv4_header_t) || ihl > l3_len) {
+    log_malformed(102, ip->ver_ihl);
+    return;
+}
 
-    u16 total = ip_htons(ip->total_len);
-    if (total < ihl || total > l3_len) {
-        log_malformed(103, total);
-        return;
-    }
-    if (net_checksum16(l3, ihl) != 0u) {
-        log_malformed(105, ip->checksum);
-        return;
-    }
+u16 total = ip_htons(ip->total_len);
+if (total < ihl || total > l3_len) {
+    log_malformed(103, total);
+    return;
+}
+if (net_checksum16(l3, ihl) != 0u) {
+    log_malformed(105, ip->checksum);
+    return;
+}
 
-    const u8* l4 = l3 + ihl;
-    u16 l4_len = (u16)(total - ihl);
-    u32 src_ip = ip_htonl(ip->src_ip);
-    arp_touch(src_ip, eth->src);
+const u8* l4 = l3 + ihl;
+u16 l4_len = (u16)(total - ihl);
+u32 src_ip = ip_htonl(ip->src_ip);
+arp_touch(src_ip, src_mac);
 
-    /* ─── NAT hook: DNAT / SNAT / port forwarding ─── */
-    {
-        u32 dst_ip_n = ip_htonl(ip->dst_ip);
-        u16 nat_sport = 0u, nat_dport = 0u;
-        int nat_rc = 1;
-        if (ip->proto == IP_PROTO_TCP && l4_len >= sizeof(tcp_header_t)) {
-            const tcp_header_t* tcp = (const tcp_header_t*)l4;
-            nat_sport = ip_htons(tcp->src_port);
-            nat_dport = ip_htons(tcp->dst_port);
-            nat_rc = nat_process_inbound(src_ip, dst_ip_n, ip->proto,
-                        nat_sport, nat_dport, (u8*)l3, total, (u8*)frame, len);
-        } else if (ip->proto == IP_PROTO_UDP && l4_len >= sizeof(udp_header_t)) {
-            const udp_header_t* udp = (const udp_header_t*)l4;
-            nat_sport = ip_htons(udp->src_port);
-            nat_dport = ip_htons(udp->dst_port);
-            nat_rc = nat_process_inbound(src_ip, dst_ip_n, ip->proto,
-                        nat_sport, nat_dport, (u8*)l3, total, (u8*)frame, len);
-        } else if (ip->proto == IP_PROTO_ICMP) {
-            nat_rc = nat_process_inbound(src_ip, dst_ip_n, ip->proto,
-                        0u, 0u, (u8*)l3, total, (u8*)frame, len);
-        }
-        if (nat_rc == 0) return;  /* NAT consumed the packet (forwarded) */
-    }
-
-    if (ip->proto == IP_PROTO_TCP) {
-        if (l4_len < sizeof(tcp_header_t)) {
-            log_malformed(104, l4_len);
-            return;
-        }
+/* ─── NAT hook: DNAT / SNAT / port forwarding ─── */
+if (frame != 0) {
+    u32 dst_ip_n = ip_htonl(ip->dst_ip);
+    u16 nat_sport = 0u, nat_dport = 0u;
+    int nat_rc = 1;
+    if (ip->proto == IP_PROTO_TCP && l4_len >= sizeof(tcp_header_t)) {
         const tcp_header_t* tcp = (const tcp_header_t*)l4;
-        u16 src_port = ip_htons(tcp->src_port);
-        u16 dst_port = ip_htons(tcp->dst_port);
-        u16 tcp_hlen = (u16)(((u16)(tcp->data_offset >> 4) & 0x0Fu) * 4u);
-        if (tcp_hlen < sizeof(tcp_header_t) || tcp_hlen > l4_len) {
-            log_malformed(107, tcp->data_offset);
-            return;
-        }
-        if (net_tcp_checksum(src_ip, g_st.local_ip, l4, l4_len) != 0u) {
-            log_malformed(108, tcp->checksum);
-            return;
-        }
-        {
-            int sk = socket_match(IP_PROTO_TCP, dst_port, src_ip, src_port);
-            if (sk < 0 && (tcp->flags & TCP_FLAG_SYN) && !(tcp->flags & TCP_FLAG_ACK)) {
-                int listener = socket_listener(IP_PROTO_TCP, dst_port);
-                if (listener >= 0) {
-                    for (u32 ci = 0u; ci < SOCK_MAX; ci++) {
-                        if (g_sock[ci].valid) continue;
-                        g_sock[ci] = g_sock[(u32)listener];
-                        g_sock[ci].id = g_sock_next++;
-                        g_sock[ci].remote_ip = src_ip;
-                        g_sock[ci].remote_port = src_port;
-                        g_sock[ci].state = NET_SOCKET_SYN_RECEIVED;
-                        g_sock[ci].parent_id = g_sock[(u32)listener].id;
-                        g_sock[ci].tx_seq = tcp_initial_sequence(g_sock[ci].id);
-                        g_sock[ci].rx_seq = ip_htonl(tcp->seq) + 1u;
-                        g_sock_rx_head[ci] = 0u; g_sock_rx_tail[ci] = 0u; g_sock_rx_count[ci] = 0u;
-                        g_st.sockets_open++;
-                        (void)tcp_raw_send_syn_ack(g_st.local_ip, src_ip, dst_port, src_port,
-                                                   g_sock[ci].tx_seq, g_sock[ci].rx_seq);
-                        sk = (int)ci;
-                        break;
-                    }
-                }
-            }
-            if (sk >= 0) {
-                net_socket_info_t* socket = &g_sock[(u32)sk];
-                u32 seq = ip_htonl(tcp->seq);
-                u32 ack = ip_htonl(tcp->ack);
-                u16 payload_len = (u16)(l4_len - tcp_hlen);
-                if (tcp->flags & TCP_FLAG_RST) {
-                    socket_abort_slot((u32)sk);
-                    } else {
-                    if ((tcp->flags & TCP_FLAG_ACK) && socket->tx_pending &&
-                        ack >= socket->pending_seq + socket->pending_len) {
-                        u32 sample = timer_ticks() - socket->tx_timestamp;
-                        socket->tx_pending = 0u;
-                        socket->pending_len = 0u;
-                        tcp_on_ack(socket, timer_ticks(), sample);
-                    } else if ((tcp->flags & TCP_FLAG_ACK) && socket->tx_pending &&
-                               ack == socket->pending_seq) {
-                        socket->dup_acks++;
-                    }
-                    if ((tcp->flags & TCP_FLAG_ACK) && socket->state == NET_SOCKET_SYN_RECEIVED) {
-                        socket->state = NET_SOCKET_ESTABLISHED;
-                    }
-                    if ((tcp->flags & TCP_FLAG_SYN) && (tcp->flags & TCP_FLAG_ACK) &&
-                        socket->state == NET_SOCKET_SYN_SENT) {
-                        socket->tx_seq += 1u;
-                        socket->rx_seq = seq + 1u;
-                        socket->state = NET_SOCKET_ESTABLISHED;
-                        (void)tcp_raw_send_ack(g_st.local_ip, src_ip, dst_port, src_port,
-                                               socket->tx_seq, socket->rx_seq);
-                    }
-                    if (payload_len > 0u && socket->state == NET_SOCKET_ESTABLISHED) {
-                        if (seq == socket->rx_seq) {
-                            socket_queue_packet(sk, src_ip, src_port, l4 + tcp_hlen, payload_len);
-                            socket->rx_seq += payload_len;
-                            (void)tcp_raw_send_ack(g_st.local_ip, src_ip, dst_port, src_port,
-                                                   socket->tx_seq, socket->rx_seq);
-                        }
-                    }
-                    if ((tcp->flags & TCP_FLAG_FIN) && socket->state != 0u) {
-                        socket->rx_seq = seq + payload_len + 1u;
-                        socket->state = NET_SOCKET_CLOSING;
-                        (void)tcp_raw_send_ack(g_st.local_ip, src_ip, dst_port, src_port,
-                                               socket->tx_seq, socket->rx_seq);
-                    }
-                }
-            }
-        }
-        lastmap_on_tcp(src_ip, src_port, dst_port, tcp->flags);
-        return;
-    }
-
-    if (ip->proto == IP_PROTO_ICMP) {
-        if (l4_len < sizeof(icmp_echo_header_t)) return;
-        const icmp_echo_header_t* icmp = (const icmp_echo_header_t*)l4;
-        if (icmp->type == 11u && icmp->code == 0u && l4_len >= 8u + sizeof(ipv4_header_t) + sizeof(icmp_echo_header_t)) {
-            const ipv4_header_t* original_ip = (const ipv4_header_t*)(l4 + 8u);
-            u16 original_ihl = (u16)((original_ip->ver_ihl & 0x0Fu) * 4u);
-            if ((original_ip->ver_ihl >> 4) == 4u &&
-                original_ihl >= sizeof(ipv4_header_t) && original_ihl + sizeof(icmp_echo_header_t) <= l4_len - 8u) {
-                const icmp_echo_header_t* original_icmp = (const icmp_echo_header_t*)((const u8*)original_ip + original_ihl);
-                if (original_ip->proto == IP_PROTO_ICMP &&
-                    ip_htons(original_icmp->identifier) == 0x4C54u &&
-                    ip_htons(original_icmp->sequence) == g_trace_sequence) {
-                    g_trace_received = 1u;
-                    g_trace_reached = 0u;
-                    g_trace_hop_ip = src_ip;
-                    g_trace_ticks = timer_ticks();
-                }
-            }
-            return;
-        }
-        if (icmp->type == 0u && icmp->code == 0u &&
-            g_ping_ip == src_ip && ip_htons(icmp->sequence) == g_ping_sequence &&
-            ip_htons(icmp->identifier) == (u16)(0x4C53u)) {
-            g_ping_received = 1u;
-            g_ping_ticks = timer_ticks();
-            g_ping_ttl = ip->ttl;
-        }
-        if (icmp->type == 0u && icmp->code == 0u &&
-            ip_htons(icmp->identifier) == 0x4C54u && ip_htons(icmp->sequence) == g_trace_sequence) {
-            g_trace_received = 1u;
-            g_trace_reached = 1u;
-            g_trace_hop_ip = src_ip;
-            g_trace_ticks = timer_ticks();
-        }
-        return;
-    }
-
-    if (ip->proto == IP_PROTO_UDP) {
-        if (l4_len < sizeof(udp_header_t)) {
-            log_malformed(105, l4_len);
-            return;
-        }
+        nat_sport = ip_htons(tcp->src_port);
+        nat_dport = ip_htons(tcp->dst_port);
+        nat_rc = nat_process_inbound(src_ip, dst_ip_n, ip->proto,
+                    nat_sport, nat_dport, (u8*)l3, total, (u8*)frame, frame_len);
+    } else if (ip->proto == IP_PROTO_UDP && l4_len >= sizeof(udp_header_t)) {
         const udp_header_t* udp = (const udp_header_t*)l4;
-        u16 udplen = ip_htons(udp->len);
-        if (udplen < sizeof(udp_header_t) || udplen > l4_len) {
-            log_malformed(106, udplen);
-            return;
-        }
-        /* IPv4 permits an all-zero UDP checksum, but a supplied checksum
-           must still validate before the datagram reaches a socket. */
-        if (udp->checksum != 0u && net_udp_checksum(src_ip, g_st.local_ip, l4, udplen) != 0u) {
-            log_malformed(109, udp->checksum);
-            return;
-        }
-        u16 src_port = ip_htons(udp->src_port);
-        u16 dst_port = ip_htons(udp->dst_port);
-        const u8* payload = l4 + sizeof(udp_header_t);
-        u16 payload_len = (u16)(udplen - sizeof(udp_header_t));
-        if (wireguard_on_udp(src_ip, src_port, dst_port, payload, payload_len)) {
-            return;
-        }
-        int sk = socket_match(IP_PROTO_UDP, dst_port, src_ip, src_port);
-        if (sk >= 0 && payload_len > 0u) {
-            g_sock[(u32)sk].state = 2u;
-            socket_queue_packet(sk, src_ip, src_port, payload, payload_len);
-        }
-        lastmap_on_udp(src_ip, src_port, dst_port, payload, payload_len);
+        nat_sport = ip_htons(udp->src_port);
+        nat_dport = ip_htons(udp->dst_port);
+        nat_rc = nat_process_inbound(src_ip, dst_ip_n, ip->proto,
+                    nat_sport, nat_dport, (u8*)l3, total, (u8*)frame, frame_len);
+    } else if (ip->proto == IP_PROTO_ICMP) {
+        nat_rc = nat_process_inbound(src_ip, dst_ip_n, ip->proto,
+                    0u, 0u, (u8*)l3, total, (u8*)frame, frame_len);
     }
+    if (nat_rc == 0) return;  /* NAT consumed the packet (forwarded) */
+}
+
+if (ip->proto == IP_PROTO_TCP) {
+    if (l4_len < sizeof(tcp_header_t)) {
+        log_malformed(104, l4_len);
+        return;
+    }
+    const tcp_header_t* tcp = (const tcp_header_t*)l4;
+    u16 src_port = ip_htons(tcp->src_port);
+    u16 dst_port = ip_htons(tcp->dst_port);
+    u16 tcp_hlen = (u16)(((u16)(tcp->data_offset >> 4) & 0x0Fu) * 4u);
+    if (tcp_hlen < sizeof(tcp_header_t) || tcp_hlen > l4_len) {
+        log_malformed(107, tcp->data_offset);
+        return;
+    }
+    if (net_tcp_checksum(src_ip, g_st.local_ip, l4, l4_len) != 0u) {
+        log_malformed(108, tcp->checksum);
+        return;
+    }
+    {
+        int sk = socket_match(IP_PROTO_TCP, dst_port, src_ip, src_port);
+        if (sk < 0 && (tcp->flags & TCP_FLAG_SYN) && !(tcp->flags & TCP_FLAG_ACK)) {
+            int listener = socket_listener(IP_PROTO_TCP, dst_port);
+            if (listener >= 0) {
+                for (u32 ci = 0u; ci < SOCK_MAX; ci++) {
+                    if (g_sock[ci].valid) continue;
+                    g_sock[ci] = g_sock[(u32)listener];
+                    g_sock[ci].id = g_sock_next++;
+                    g_sock[ci].remote_ip = src_ip;
+                    g_sock[ci].remote_port = src_port;
+                    g_sock[ci].state = NET_SOCKET_SYN_RECEIVED;
+                    g_sock[ci].parent_id = g_sock[(u32)listener].id;
+                    g_sock[ci].tx_seq = tcp_initial_sequence(g_sock[ci].id);
+                    g_sock[ci].rx_seq = ip_htonl(tcp->seq) + 1u;
+                    g_sock_rx_head[ci] = 0u; g_sock_rx_tail[ci] = 0u; g_sock_rx_count[ci] = 0u;
+                    g_st.sockets_open++;
+                    (void)tcp_raw_send_syn_ack(g_st.local_ip, src_ip, dst_port, src_port,
+                                               g_sock[ci].tx_seq, g_sock[ci].rx_seq);
+                    sk = (int)ci;
+                    break;
+                }
+            }
+        }
+        if (sk >= 0) {
+            net_socket_info_t* socket = &g_sock[(u32)sk];
+            u32 seq = ip_htonl(tcp->seq);
+            u32 ack = ip_htonl(tcp->ack);
+            u16 payload_len = (u16)(l4_len - tcp_hlen);
+            if (tcp->flags & TCP_FLAG_RST) {
+                socket_abort_slot((u32)sk);
+                } else {
+                if ((tcp->flags & TCP_FLAG_ACK) && socket->tx_pending &&
+                    ack >= socket->pending_seq + socket->pending_len) {
+                    u32 sample = timer_ticks() - socket->tx_timestamp;
+                    socket->tx_pending = 0u;
+                    socket->pending_len = 0u;
+                    tcp_on_ack(socket, timer_ticks(), sample);
+                } else if ((tcp->flags & TCP_FLAG_ACK) && socket->tx_pending &&
+                           ack == socket->pending_seq) {
+                    socket->dup_acks++;
+                }
+                if ((tcp->flags & TCP_FLAG_ACK) && socket->state == NET_SOCKET_SYN_RECEIVED) {
+                    socket->state = NET_SOCKET_ESTABLISHED;
+                }
+                if ((tcp->flags & TCP_FLAG_SYN) && (tcp->flags & TCP_FLAG_ACK) &&
+                    socket->state == NET_SOCKET_SYN_SENT) {
+                    socket->tx_seq += 1u;
+                    socket->rx_seq = seq + 1u;
+                    socket->state = NET_SOCKET_ESTABLISHED;
+                    (void)tcp_raw_send_ack(g_st.local_ip, src_ip, dst_port, src_port,
+                                           socket->tx_seq, socket->rx_seq);
+                }
+                if (payload_len > 0u && socket->state == NET_SOCKET_ESTABLISHED) {
+                    if (seq == socket->rx_seq) {
+                        socket_queue_packet(sk, src_ip, src_port, l4 + tcp_hlen, payload_len);
+                        socket->rx_seq += payload_len;
+                        (void)tcp_raw_send_ack(g_st.local_ip, src_ip, dst_port, src_port,
+                                               socket->tx_seq, socket->rx_seq);
+                    }
+                }
+                if ((tcp->flags & TCP_FLAG_FIN) && socket->state != 0u) {
+                    socket->rx_seq = seq + payload_len + 1u;
+                    socket->state = NET_SOCKET_CLOSING;
+                    (void)tcp_raw_send_ack(g_st.local_ip, src_ip, dst_port, src_port,
+                                           socket->tx_seq, socket->rx_seq);
+                }
+            }
+        }
+    }
+    lastmap_on_tcp(src_ip, src_port, dst_port, tcp->flags);
+    return;
+}
+
+if (ip->proto == IP_PROTO_ICMP) {
+    if (l4_len < sizeof(icmp_echo_header_t)) return;
+    const icmp_echo_header_t* icmp = (const icmp_echo_header_t*)l4;
+    if (icmp->type == 11u && icmp->code == 0u && l4_len >= 8u + sizeof(ipv4_header_t) + sizeof(icmp_echo_header_t)) {
+        const ipv4_header_t* original_ip = (const ipv4_header_t*)(l4 + 8u);
+        u16 original_ihl = (u16)((original_ip->ver_ihl & 0x0Fu) * 4u);
+        if ((original_ip->ver_ihl >> 4) == 4u &&
+            original_ihl >= sizeof(ipv4_header_t) && original_ihl + sizeof(icmp_echo_header_t) <= l4_len - 8u) {
+            const icmp_echo_header_t* original_icmp = (const icmp_echo_header_t*)((const u8*)original_ip + original_ihl);
+            if (original_ip->proto == IP_PROTO_ICMP &&
+                ip_htons(original_icmp->identifier) == 0x4C54u &&
+                ip_htons(original_icmp->sequence) == g_trace_sequence) {
+                g_trace_received = 1u;
+                g_trace_reached = 0u;
+                g_trace_hop_ip = src_ip;
+                g_trace_ticks = timer_ticks();
+            }
+        }
+        return;
+    }
+    if (icmp->type == 0u && icmp->code == 0u &&
+        g_ping_ip == src_ip && ip_htons(icmp->sequence) == g_ping_sequence &&
+        ip_htons(icmp->identifier) == (u16)(0x4C53u)) {
+        g_ping_received = 1u;
+        g_ping_ticks = timer_ticks();
+        g_ping_ttl = ip->ttl;
+    }
+    if (icmp->type == 0u && icmp->code == 0u &&
+        ip_htons(icmp->identifier) == 0x4C54u && ip_htons(icmp->sequence) == g_trace_sequence) {
+        g_trace_received = 1u;
+        g_trace_reached = 1u;
+        g_trace_hop_ip = src_ip;
+        g_trace_ticks = timer_ticks();
+    }
+    return;
+}
+
+if (ip->proto == IP_PROTO_UDP) {
+    if (l4_len < sizeof(udp_header_t)) {
+        log_malformed(105, l4_len);
+        return;
+    }
+    const udp_header_t* udp = (const udp_header_t*)l4;
+    u16 udplen = ip_htons(udp->len);
+    if (udplen < sizeof(udp_header_t) || udplen > l4_len) {
+        log_malformed(106, udplen);
+        return;
+    }
+    /* IPv4 permits an all-zero UDP checksum, but a supplied checksum
+       must still validate before the datagram reaches a socket. */
+    if (udp->checksum != 0u && net_udp_checksum(src_ip, g_st.local_ip, l4, udplen) != 0u) {
+        log_malformed(109, udp->checksum);
+        return;
+    }
+    u16 src_port = ip_htons(udp->src_port);
+    u16 dst_port = ip_htons(udp->dst_port);
+    const u8* payload = l4 + sizeof(udp_header_t);
+    u16 payload_len = (u16)(udplen - sizeof(udp_header_t));
+    if (wireguard_on_udp(src_ip, src_port, dst_port, payload, payload_len)) {
+        return;
+    }
+    int sk = socket_match(IP_PROTO_UDP, dst_port, src_ip, src_port);
+    if (sk >= 0 && payload_len > 0u) {
+        g_sock[(u32)sk].state = 2u;
+        socket_queue_packet(sk, src_ip, src_port, payload, payload_len);
+    }
+    lastmap_on_udp(src_ip, src_port, dst_port, payload, payload_len);
+}
 }
 
 int netstack_ping(u32 remote_ip, u16 sequence, u32 timeout_ticks, u32* out_ticks, u8* out_ttl) {

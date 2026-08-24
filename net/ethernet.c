@@ -1,5 +1,6 @@
 #include "ethernet.h"
 #include "nic.h"
+#include "wireguard.h"
 
 static u8 g_local_mac[ETH_ADDR_LEN] = { 0x52, 0x54, 0x00, 0x12, 0x34, 0x56 };
 static u8 g_peer_mac[ETH_ADDR_LEN] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
@@ -26,6 +27,11 @@ void ethernet_set_peer_mac(const u8* mac) {
 int ethernet_send_frame(const u8* frame, u16 len) {
     if (!frame || len < sizeof(eth_header_t) || len > 1514) {
         return -1;
+    }
+    /* WireGuard policy: datagrams bound for the allowed network must go
+     * through the tunnel; interception consumes them. */
+    if (wireguard_intercept_outbound(frame, len)) {
+        return 0;
     }
     return nic_send_frame(frame, len);
 }

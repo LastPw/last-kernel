@@ -33,6 +33,7 @@ typedef struct {
     u32 handshake_count;
     u32 replay_drops;
     u32 auth_failures;
+    u32 tx_route_drops;
     u32 session_age_ticks;
     u32 last_handshake_tick;
 } wireguard_status_t;
@@ -52,9 +53,12 @@ void wireguard_status(wireguard_status_t* out);
 u16  wireguard_listen_port(void);
 u8   wireguard_active(void);
 
-/* netstack hooks. on_udp returns 1 if the datagram was consumed. */
+/* netstack hooks. on_udp returns 1 if the datagram was consumed.
+ * intercept_outbound consumes IPv4 frames bound for the allowed network
+ * and encapsulates them into the tunnel (called from ethernet_send_frame). */
 int  wireguard_on_udp(u32 src_ip, u16 src_port, u16 dst_port,
                       const u8* data, u16 len);
+int  wireguard_intercept_outbound(const u8* frame, u16 len);
 void wireguard_tick(void);
 
 /* Message-oriented encrypted send over the established session. */
