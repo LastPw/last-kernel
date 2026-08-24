@@ -505,7 +505,11 @@ static int fat_dir_scan(fat_fs_t* fs, const fat_dirloc_t* loc,
             pend_active = 0u;
         }
 
-        if (loc->is_fixed_root) break;
+        if (loc->is_fixed_root) {
+            container++;
+            if (container >= fixed_containers) break;
+            continue;
+        }
         container = fat_get_next(fs, container);
     }
 done:
@@ -559,7 +563,11 @@ static int fat_dir_alloc_run(fat_fs_t* fs, const fat_dirloc_t* loc, u32 count,
                 found = 0u; /* restart run */
             }
         }
-        if (loc->is_fixed_root) break;
+        if (loc->is_fixed_root) {
+            container++;
+            if (container >= fixed_containers) break;
+            continue;
+        }
         if (found < count && !extended) container = fat_get_next(fs, container);
         else if (found < count && extended) break;
     }
