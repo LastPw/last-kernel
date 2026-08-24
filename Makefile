@@ -903,8 +903,8 @@ test:
 	gcc -O2 -Wall -Wextra -iquote include -Icrypto/bearssl -o $(BUILD_DIR)/tests/wg_noise_tests \
 		tests/wg_noise_tests.c crypto/blake2s.c crypto/noise_ik.c $(BUILD_DIR)/tests/libbearssl_host.a
 	./$(BUILD_DIR)/tests/wg_noise_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/wg_noise_tests tests/wg_noise_tests.c crypto/blake2s.c crypto/noise_ik.c
-	./$(BUILD_DIR)/tests/wg_noise_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/fat_tests tests/fat_tests.c
+	./$(BUILD_DIR)/tests/fat_tests
 
 qemu: $(BUILD_DIR)/lastkernel.iso
 	qemu-system-x86_64 -cdrom $(BUILD_DIR)/lastkernel.iso -m 512M -serial stdio

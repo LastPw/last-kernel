@@ -25,7 +25,7 @@
 
 ### Filesystems (VFS)
 - VFS layer with dynamic mount table, devfs, pipes.
-- **Ext2** (read/write, `fs/ext2.c`), FAT32 (`fs/fat.c`), Minix v1/v2 (`fs/minix.c`), NTFS read-only (`fs/ntfs.c`).
+- **Ext2** (read/write, `fs/ext2.c`), **FAT** (full read/write: file create/delete, cluster-chain allocation with grow/shrink rewrites, subdirectories, disk-full handling — covered by host-side mock-disk vectors in `tests/fat_tests.c`; 8.3 short names only), Minix v1/v2 (`fs/minix.c`), NTFS read-only (`fs/ntfs.c`).
 - **LastFS 2.0** (`fs/lastfs.c`): native FS with WAL journaling, extent allocation, CRC32C integrity — covered by host-side unit tests including crash/journal-replay recovery (`tests/lastfs_tests.c`).
 
 ### Drivers
