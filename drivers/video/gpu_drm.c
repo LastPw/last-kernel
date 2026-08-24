@@ -28,7 +28,7 @@ int gpu_drm_init(void) {
         } else if (dev.vendor == GPU_VENDOR_AMD) {
             serial_writeln("[GPU-DRM] AMD Radeon DRM/KMS Driver Initialized (AMDGPU Active)");
         } else if (dev.vendor == GPU_VENDOR_INTEL) {
-            serial_writeln("[GPU-DRM] Intel HD/UHD Graphics i915 DRM Driver Initialized");
+            serial_writeln("[GPU-DRM] Intel HD/UHD Graphics DRM Backend Initialized");
         } else {
             serial_writeln("[GPU-DRM] Generic Display Controller Initialized with HW Acceleration");
         }

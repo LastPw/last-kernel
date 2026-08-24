@@ -92,8 +92,6 @@ C_OBJS := \
 	$(BUILD_DIR)/rtl8139.o \
 	$(BUILD_DIR)/pcnet.o \
 	$(BUILD_DIR)/virtio_net.o \
-	$(BUILD_DIR)/iwlwifi.o \
-	$(BUILD_DIR)/bluetooth.o \
 	$(BUILD_DIR)/netstack.o \
 	$(BUILD_DIR)/nic.o \
 	$(BUILD_DIR)/ip.o \
@@ -109,10 +107,8 @@ C_OBJS := \
 	$(BUILD_DIR)/dns_server.o \
 	$(BUILD_DIR)/dhcp_server.o \
 	$(BUILD_DIR)/airmesh.o \
-	$(BUILD_DIR)/wireguard.o \
 	$(BUILD_DIR)/httpd.o \
 	$(BUILD_DIR)/xhci.o \
-	$(BUILD_DIR)/usb_ehci.o \
 	$(BUILD_DIR)/usb_ohci.o \
 	$(BUILD_DIR)/usb_msc.o \
 	$(BUILD_DIR)/keyboard.o \
@@ -122,12 +118,10 @@ C_OBJS := \
 	$(BUILD_DIR)/serial.o \
 	$(BUILD_DIR)/screen.o \
 	$(BUILD_DIR)/pty.o \
-	$(BUILD_DIR)/hdaudio.o \
 	$(BUILD_DIR)/ac97.o \
 	$(BUILD_DIR)/pcspeaker.o \
 	$(BUILD_DIR)/vbe.o \
 	$(BUILD_DIR)/virtio_gpu.o \
-	$(BUILD_DIR)/i915.o \
 	$(BUILD_DIR)/gpu_drm.o \
 	$(BUILD_DIR)/gpu_backend.o \
 	$(BUILD_DIR)/display_mst.o \
@@ -149,10 +143,7 @@ C_OBJS := \
 	$(BUILD_DIR)/sha256.o \
 	$(BUILD_DIR)/tpm2.o \
 	$(BUILD_DIR)/epoll.o \
-	$(BUILD_DIR)/io_uring.o \
 	$(BUILD_DIR)/io_scheduler.o \
-	$(BUILD_DIR)/ebpf.o \
-	$(BUILD_DIR)/kprobes.o \
 	$(BUILD_DIR)/shm.o \
 	$(BUILD_DIR)/ipc.o \
 	$(BUILD_DIR)/cgroup.o \
@@ -211,11 +202,8 @@ C_OBJS := \
 	$(BUILD_DIR)/compat_dllsync.o \
 	$(BUILD_DIR)/compat_bridge.o \
 	$(BUILD_DIR)/linux_compat.o \
-	$(BUILD_DIR)/linux_rootfs.o \
-	$(BUILD_DIR)/wayland_bridge.o \
 	$(BUILD_DIR)/hal.o \
 	$(BUILD_DIR)/ultimate.o \
-	$(BUILD_DIR)/universal_runtime.o \
 	$(BUILD_DIR)/sdc.o \
 	$(BUILD_DIR)/selftest.o \
 	$(BUILD_DIR)/gfx.o \
@@ -456,12 +444,6 @@ $(BUILD_DIR)/pcnet.o: drivers/net/pcnet.c | $(BUILD_DIR)
 $(BUILD_DIR)/virtio_net.o: drivers/net/virtio_net.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/iwlwifi.o: drivers/net/iwlwifi.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/bluetooth.o: drivers/net/bluetooth.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/netstack.o: net/netstack.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -507,16 +489,10 @@ $(BUILD_DIR)/dhcp_server.o: net/dhcp_server.c | $(BUILD_DIR)
 $(BUILD_DIR)/airmesh.o: net/airmesh.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wireguard.o: net/wireguard.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/httpd.o: net/httpd.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/xhci.o: drivers/usb/xhci.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/usb_ehci.o: drivers/usb/usb_ehci.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/usb_ohci.o: drivers/usb/usb_ohci.c | $(BUILD_DIR)
@@ -546,9 +522,6 @@ $(BUILD_DIR)/screen.o: drivers/char/screen.c | $(BUILD_DIR)
 $(BUILD_DIR)/pty.o: drivers/char/pty.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/hdaudio.o: drivers/audio/hdaudio.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/ac97.o: drivers/audio/ac97.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -559,9 +532,6 @@ $(BUILD_DIR)/vbe.o: drivers/video/vbe.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/virtio_gpu.o: drivers/video/virtio_gpu.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/i915.o: drivers/video/i915.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/gpu_drm.o: drivers/video/gpu_drm.c | $(BUILD_DIR)
@@ -627,16 +597,7 @@ $(BUILD_DIR)/tpm2.o: kernel/security/tpm2.c | $(BUILD_DIR)
 $(BUILD_DIR)/epoll.o: net/epoll.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/io_uring.o: kernel/tracing/io_uring.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/io_scheduler.o: fs/io_scheduler.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/ebpf.o: kernel/tracing/ebpf.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/kprobes.o: kernel/tracing/kprobes.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/shm.o: kernel/ipc/shm.c | $(BUILD_DIR)
@@ -783,19 +744,10 @@ $(BUILD_DIR)/compat_bridge.o: kernel/lib/compat_bridge.c | $(BUILD_DIR)
 $(BUILD_DIR)/linux_compat.o: kernel/compat/linux_compat.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/linux_rootfs.o: kernel/compat/linux_rootfs.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/wayland_bridge.o: kernel/compat/wayland_bridge.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/hal.o: kernel/lib/hal.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ultimate.o: kernel/lib/ultimate.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/universal_runtime.o: kernel/lib/universal_runtime.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/sdc.o: kernel/lib/sdc.c | $(BUILD_DIR)
@@ -930,6 +882,8 @@ test:
 	./$(BUILD_DIR)/tests/fde_aes_kat
 	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/lastfs_tests tests/lastfs_tests.c
 	./$(BUILD_DIR)/tests/lastfs_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/wg_noise_tests tests/wg_noise_tests.c crypto/blake2s.c crypto/noise_ik.c
+	./$(BUILD_DIR)/tests/wg_noise_tests
 
 qemu: $(BUILD_DIR)/lastkernel.iso
 	qemu-system-x86_64 -cdrom $(BUILD_DIR)/lastkernel.iso -m 512M -serial stdio

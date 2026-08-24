@@ -580,6 +580,7 @@ static void socket_queue_packet6(int slot, const u8 src_ip[16], u16 src_port, co
 }
 
 #include "airmesh.h"
+#include "wireguard.h"
 
 void netstack_init(void) {
     g_st.frames_rx = 0u;
@@ -619,6 +620,7 @@ void netstack_init(void) {
     (void)netstack_route_add(0u, 0u, g_st.local_gw, 100u);
 
     airmesh_init();
+    wireguard_init();
 }
 
 void netstack_poll(u32 budget) {
@@ -627,6 +629,7 @@ void netstack_poll(u32 budget) {
     dhcp_server_poll();
     netstack_tick();
     airmesh_tick();
+    wireguard_tick();
 }
 
 void netstack_on_frame(const u8* frame, u16 len) {
@@ -870,6 +873,9 @@ void netstack_on_frame(const u8* frame, u16 len) {
         u16 dst_port = ip_htons(udp->dst_port);
         const u8* payload = l4 + sizeof(udp_header_t);
         u16 payload_len = (u16)(udplen - sizeof(udp_header_t));
+        if (wireguard_on_udp(src_ip, src_port, dst_port, payload, payload_len)) {
+            return;
+        }
         int sk = socket_match(IP_PROTO_UDP, dst_port, src_ip, src_port);
         if (sk >= 0 && payload_len > 0u) {
             g_sock[(u32)sk].state = 2u;

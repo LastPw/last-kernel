@@ -1,5 +1,4 @@
 #include "linux_compat.h"
-#include "linux_rootfs.h"
 #include "heap.h"
 #include "string.h"
 #include "serial.h"
@@ -27,7 +26,6 @@ static const char* s_proc_cpuinfo = "processor\t: 0\nvendor_id\t: GenuineIntel\n
 
 int linux_compat_init(void) {
     if (s_linux_inited) return 0;
-    linux_rootfs_init();
     for (u32 i = 0; i < MAX_LINUX_SANDBOXES; i++) {
         s_sandboxes[i].active = 0;
         s_sandboxes[i].sandbox_id = i;

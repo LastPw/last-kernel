@@ -65,7 +65,7 @@
 #include "pcspeaker.h"
 #include "ac97.h"
 #include "rtl8169.h"
-#include "usb_ehci.h"
+
 #include "touchpad.h"
 #include "printer.h"
 #include "ide.h"
@@ -114,17 +114,10 @@
 #include "virtio_gpu.h"
 #include "e1000.h"
 #include "ahci.h"
-#include "hdaudio.h"
 #include "rtl8139.h"
 #include "vbe.h"
-#include "i915.h"
-#include "iwlwifi.h"
 #include "gpu_drm.h"
-#include "bluetooth.h"
 #include "display_mst.h"
-#include "io_uring.h"
-#include "ebpf.h"
-#include "kprobes.h"
 #include "shm.h"
 #include "pkg_manager.h"
 
@@ -827,9 +820,6 @@ static int kmod_services(void) {
     vma_init();
     tpm2_init();
     epoll_init();
-    io_uring_init();
-    ebpf_init();
-    kprobes_init();
     shm_init();
     pkg_manager_init();
     keyboard_init();
@@ -854,16 +844,11 @@ static int kmod_services(void) {
     rtl8169_init();
     ahci_init();
     ide_init();
-    hdaudio_init();
     ac97_init();
     vbe_init(0, 0, 0, 0, 0);
-    i915_init();
-    iwlwifi_init();
     virtio_gpu_init();
     gpu_drm_init();
-    bluetooth_init();
     display_mst_init();
-    usb_ehci_init();
 
     nic_init();
     /* IPv6 link-local and NDP state depend on the NIC MAC being ready. */

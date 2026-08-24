@@ -42,64 +42,6 @@ static void cmd_dns(const char* args) {
     kputs("Usage: dns show|set <slot 0..2> <ipv4>|reset|cache clear\n");
 }
 
-static int parse_hex_key(const char* text, u8 out[32]) {
-    if (!text || !out || str_len(text) != 64u) return -1;
-    for (u32 i = 0u; i < 32u; i++) {
-        u8 hi, lo;
-        char a = text[i * 2u], b = text[i * 2u + 1u];
-        if (a >= '0' && a <= '9') hi = (u8)(a - '0');
-        else if (a >= 'a' && a <= 'f') hi = (u8)(a - 'a' + 10); else if (a >= 'A' && a <= 'F') hi = (u8)(a - 'A' + 10); else return -1;
-        if (b >= '0' && b <= '9') lo = (u8)(b - '0');
-        else if (b >= 'a' && b <= 'f') lo = (u8)(b - 'a' + 10); else if (b >= 'A' && b <= 'F') lo = (u8)(b - 'A' + 10); else return -1;
-        out[i] = (u8)((hi << 4u) | lo);
-    }
-    return 0;
-}
-
-static void cmd_vpn(const char* args) {
-    char sub[16], endpoint[64], port_text[16], private_text[80], peer_text[80], net_text[32], mask_text[32];
-    u32 port = 0u, network, mask;
-    int ok = 0;
-    wireguard_status_t st;
-    args = read_token(skip_space(args), sub, sizeof(sub));
-    if (!sub[0] || str_cmp(sub, "show") == 0 || str_cmp(sub, "status") == 0) {
-        wireguard_status(&st);
-        kputs("WireGuard configured: "); kputs(st.configured ? "yes\n" : "no\n");
-        if (st.configured) {
-            char nb[32], mb[32];
-            ip_format_ipv4(st.allowed_network, nb, sizeof(nb)); ip_format_ipv4(st.allowed_mask, mb, sizeof(mb));
-            kputs("endpoint="); kputs(st.endpoint); kputs(":"); print_u32(st.endpoint_port);
-            kputs(" allowed="); kputs(nb); kputs("/"); kputs(mb); kputc('\n');
-        }
-        kputs("tunnel state: "); kputs(st.active ? "connected\n" : "inactive\n");
-        return;
-    }
-    if (str_cmp(sub, "clear") == 0) { wireguard_clear(); kputs("WireGuard profile cleared\n"); return; }
-    if (str_cmp(sub, "stop") == 0) { (void)wireguard_stop(); kputs("WireGuard stopped\n"); return; }
-    if (str_cmp(sub, "start") == 0) {
-        int rc = wireguard_start();
-        if (rc == 0) kputs("WireGuard connected\n");
-        else kputs(rc == -1 ? "WireGuard is not configured\n" : "WireGuard handshake backend is not ready; route unchanged\n");
-        return;
-    }
-    if (str_cmp(sub, "configure") == 0) {
-        args = read_token(skip_space(args), endpoint, sizeof(endpoint));
-        args = read_token(skip_space(args), port_text, sizeof(port_text));
-        args = read_token(skip_space(args), private_text, sizeof(private_text));
-        args = read_token(skip_space(args), peer_text, sizeof(peer_text));
-        args = read_token(skip_space(args), net_text, sizeof(net_text));
-        (void)read_token(skip_space(args), mask_text, sizeof(mask_text));
-        if (parse_u32(port_text, &port) != 0 || port > 65535u || parse_hex_key(private_text, st.private_key) != 0 ||
-            parse_hex_key(peer_text, st.peer_key) != 0) { kputs("vpn: invalid endpoint, port, or key\n"); return; }
-        network = ip_parse_ipv4(net_text, &ok); if (!ok) { kputs("vpn: invalid allowed network\n"); return; }
-        mask = ip_parse_ipv4(mask_text, &ok); if (!ok || mask == 0u) { kputs("vpn: invalid allowed mask\n"); return; }
-        if (wireguard_configure(endpoint, (u16)port, st.private_key, st.peer_key, network, mask) != 0) { kputs("vpn: configuration rejected\n"); return; }
-        kputs("WireGuard profile configured; run 'vpn start' after the handshake backend is enabled\n");
-        return;
-    }
-    kputs("Usage: vpn show|configure <endpoint> <port> <private-key-hex> <peer-key-hex> <network> <mask>|start|stop|clear\n");
-}
-
 static void cmd_netstack(const char* args) {
     char t0[16], t1[32], t2[32], t3[32], t4[16];
     u32 n = 8, idx = 0, metric = 0;
@@ -1530,7 +1472,7 @@ static void cmd_airmesh(const char* args) {
 
     if (!sub[0] || str_cmp(sub, "status") == 0) {
         airmesh_get_status(&st);
-        kputs("AirMesh Sovereign L2 Protocol\n");
+        kputs("AirMesh Experimental L2 Protocol\n");
         kputs("PHY Layer: ");
         if (st.phy_mode == AIRMESH_PHY_ETHERNET) kputs("Ethernet Raw (802.3)\n");
         else if (st.phy_mode == AIRMESH_PHY_WIFI_ADHOC) kputs("Wi-Fi Ad-Hoc (IBSS)\n");
@@ -1538,8 +1480,7 @@ static void cmd_airmesh(const char* args) {
 
         kputs("Local Node ID: "); print_u32(st.local_node_id);
         kputs(" ("); kputs(st.local_hostname); kputs(")\n");
-        kputs("Connected Peers: "); print_u32(st.peer_count);
-        kputs(" | Secure Sessions: "); print_u32(st.secure_sessions_active);
+        kputs("Known Peers: "); print_u32(st.peer_count);
         kputs("\nBeacons TX/RX: "); print_u32(st.beacons_sent);
         kputs("/"); print_u32(st.beacons_received);
         kputs(" | Msg TX/RX: "); print_u32(st.messages_sent);
@@ -1551,10 +1492,7 @@ static void cmd_airmesh(const char* args) {
                 kputs("  [Node "); print_u32(st.peers[i].node_id);
                 kputs("] "); kputs(st.peers[i].hostname);
                 kputs(" Quality: "); print_u32(st.peers[i].link_quality);
-                kputs("% Session: ");
-                if (st.peers[i].session_state == AIRMESH_SESSION_ESTABLISHED) kputs("ChaCha20-Poly1305");
-                else kputs("Handshake");
-                kputs(" RX/TX: "); print_u32(st.peers[i].packets_rx);
+                kputs("% RX/TX: "); print_u32(st.peers[i].packets_rx);
                 kputs("/"); print_u32(st.peers[i].packets_tx);
                 kputc('\n');
             }
@@ -1576,44 +1514,12 @@ static void cmd_airmesh(const char* args) {
         const char* msg = skip_space(args);
         if (!msg[0]) msg = "Hello from LastOS Sovereign Node!";
         if (airmesh_send_text(target, msg) == 0) {
-            kputs("AirMesh encrypted message transmitted.\n");
+            kputs("AirMesh message transmitted.\n");
         } else {
             kputs("AirMesh transmit failed.\n");
         }
         return;
     }
     kputs("Usage: airmesh status|beacon|send <target_node_id> <msg>\n");
-}
-
-static void cmd_tots(const char* args) {
-    tots_status_t st;
-    char sub[16];
-    args = read_token(skip_space(args), sub, sizeof(sub));
-
-    if (!sub[0] || str_cmp(sub, "status") == 0) {
-        tots_get_status(&st);
-        kputs("Traffic-Obfuscation Transport Subsystem (TOTS)\n");
-        kputs("Status: "); kputs(st.enabled ? "ENABLED" : "DISABLED");
-        kputs(" | Mode: ");
-        if (st.mode == TOTS_MODE_STATEFUL_TLS) kputs("Stateful TLS 1.3 Mimicry");
-        else if (st.mode == TOTS_MODE_QUIC_STREAM) kputs("QUIC Video Frame");
-        else kputs("OFF");
-        kputs("\nEntropy Score: 0."); print_u32(st.entropy_score_permille);
-        kputs(" | Obfuscated Packets: "); print_u32(st.obfuscated_packets);
-        kputs("\nDynamic Padding: "); print_u32(st.dynamic_padding_bytes);
-        kputs(" bytes | Avg Jitter: "); print_u32(st.avg_jitter_ms); kputs("ms\n");
-        return;
-    }
-    if (str_cmp(sub, "enable") == 0 || str_cmp(sub, "on") == 0) {
-        tots_set_mode(TOTS_MODE_STATEFUL_TLS);
-        kputs("TOTS enabled (Stateful TLS 1.3 framing & dynamic padding).\n");
-        return;
-    }
-    if (str_cmp(sub, "disable") == 0 || str_cmp(sub, "off") == 0) {
-        tots_set_mode(TOTS_MODE_OFF);
-        kputs("TOTS disabled.\n");
-        return;
-    }
-    kputs("Usage: tots status|enable|disable\n");
 }
 

@@ -960,7 +960,6 @@ static void cmd_linux(const char* args) {
         kputs("[LINUX_SANDBOX] Container ready (Sandbox ID: ");
         print_u32((u32)sb_id);
         kputs(")\n");
-        kputs("[LINUX_SANDBOX] Connected to Wayland Display Server (/tmp/wayland-0)\n");
         return;
     }
 

@@ -1347,27 +1347,4 @@ static void cmd_ghost(const char* args) {
     kputs("Usage: ghost status|freeze <task_id>|thaw <task_id>\n");
 }
 
-#include "universal_runtime.h"
-
-static void cmd_runtime(const char* args) {
-    universal_runtime_stats_t st;
-    char sub[16];
-    args = read_token(skip_space(args), sub, sizeof(sub));
-
-    if (!sub[0] || str_cmp(sub, "status") == 0) {
-        universal_runtime_get_stats(&st);
-        kputs("Universal Direct-Metal Multi-Binary Runtime\n");
-        kputs("Active Runtimes: [Linux ELF64] [Windows PE32+] [WebAssembly AOT]\n");
-        kputs("Total Executed: "); print_u32(st.total_binaries_executed);
-        kputs(" (ELF64: "); print_u32(st.elf64_executions);
-        kputs(", PE32+: "); print_u32(st.pe32p_executions);
-        kputs(", WASM: "); print_u32(st.wasm_executions);
-        kputs(")\nDirect Syscall Transpositions: "); print_u32(st.direct_syscall_transpositions);
-        kputs(" | Fastpath Overhead: "); print_u32(st.avg_transposition_cycles);
-        kputs(" cycles (< 1.5 ns)\nEmulation Layers: NONE (Bare-Metal CPU ABI Fastlane)\n");
-        return;
-    }
-    kputs("Usage: runtime status\n");
-}
-
 

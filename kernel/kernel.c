@@ -6,7 +6,6 @@
 #include "io.h"
 #include "serial.h"
 #include "userdb.h"
-#include "universal_runtime.h"
 
 void stack_protector_init(void);
 
@@ -25,7 +24,6 @@ void kmain(void) {
     */
     core_init();
     userdb_init();
-    universal_runtime_init();
 
     serial_writeln("=================================================");
     serial_writeln("  LastKernel — Standalone Pure 64-Bit Monolith   ");

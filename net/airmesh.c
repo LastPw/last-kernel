@@ -5,7 +5,6 @@
 #include "timer.h"
 
 static airmesh_status_t s_airmesh;
-static tots_status_t s_tots;
 static u32 s_last_beacon_tick = 0;
 
 static airmesh_peer_t* find_or_alloc_peer(u32 node_id, const u8* mac) {
@@ -23,9 +22,8 @@ static airmesh_peer_t* find_or_alloc_peer(u32 node_id, const u8* mac) {
             memcpy(s_airmesh.peers[i].mac, mac, 6);
             s_airmesh.peers[i].link_quality = 95;
             s_airmesh.peers[i].hop_count = 1;
-            s_airmesh.peers[i].session_state = AIRMESH_SESSION_ESTABLISHED;
+            s_airmesh.peers[i].session_state = AIRMESH_SESSION_IDLE;
             s_airmesh.peer_count++;
-            s_airmesh.secure_sessions_active++;
             return &s_airmesh.peers[i];
         }
     }
@@ -35,11 +33,10 @@ static airmesh_peer_t* find_or_alloc_peer(u32 node_id, const u8* mac) {
 void airmesh_init(void) {
     memset(&s_airmesh, 0, sizeof(airmesh_status_t));
     s_airmesh.local_node_id = 0xA180C0DEu;
-    str_cpy(s_airmesh.local_hostname, "lastos-sovereign-01");
+    str_cpy(s_airmesh.local_hostname, "lastos-node-01");
     s_airmesh.phy_mode = AIRMESH_PHY_ETHERNET;
 
-    tots_init();
-    serial_writeln("[AirMesh] Sovereign L2 Protocol Engine initialized (PHY: Ethernet/802.11s).");
+    serial_writeln("[AirMesh] Experimental L2 beacon/text protocol initialized (PHY: Ethernet).");
 }
 
 void airmesh_set_phy_mode(u32 mode) {
@@ -157,54 +154,4 @@ void airmesh_get_status(airmesh_status_t* out) {
     if (out) {
         memcpy(out, &s_airmesh, sizeof(airmesh_status_t));
     }
-}
-
-/* ============================================================================
- * Traffic-Obfuscation Transport Subsystem (TOTS) Implementation
- * ============================================================================ */
-
-void tots_init(void) {
-    memset(&s_tots, 0, sizeof(tots_status_t));
-    s_tots.enabled = 1;
-    s_tots.mode = TOTS_MODE_STATEFUL_TLS;
-    s_tots.avg_jitter_ms = 4;
-    s_tots.entropy_score_permille = 965; /* 0.965 high entropy mimicking real TLS */
-    s_tots.stateful_handshakes = 1;
-}
-
-void tots_set_mode(u32 mode) {
-    if (mode == TOTS_MODE_OFF) {
-        s_tots.enabled = 0;
-        s_tots.mode = TOTS_MODE_OFF;
-    } else {
-        s_tots.enabled = 1;
-        s_tots.mode = mode;
-    }
-}
-
-void tots_get_status(tots_status_t* out) {
-    if (out) {
-        memcpy(out, &s_tots, sizeof(tots_status_t));
-    }
-}
-
-int tots_transform_packet(const u8* in_pkt, u16 in_len, u8* out_pkt, u16* out_len) {
-    if (!s_tots.enabled || !in_pkt || !out_pkt || !out_len) return -1;
-
-    /* Wrap packet in a stateful TLS 1.3 Application Data Record */
-    out_pkt[0] = 0x17; /* TLS Application Data */
-    out_pkt[1] = 0x03; /* Legacy Version 3.3 (TLS 1.2/1.3 standard) */
-    out_pkt[2] = 0x03;
-
-    u16 padded_len = in_len + 16u; /* Add 16 bytes of dynamic padding */
-    out_pkt[3] = (u8)((padded_len >> 8) & 0xFF);
-    out_pkt[4] = (u8)(padded_len & 0xFF);
-
-    memcpy(out_pkt + 5, in_pkt, in_len);
-    memset(out_pkt + 5 + in_len, 0xAA, 16); /* padding bytes */
-
-    *out_len = 5u + padded_len;
-    s_tots.obfuscated_packets++;
-    s_tots.dynamic_padding_bytes += 16;
-    return 0;
 }

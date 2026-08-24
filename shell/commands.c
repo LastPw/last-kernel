@@ -17,7 +17,6 @@
 #include "virtio_net.h"
 #include "tls.h"
 #include "httpd.h"
-#include "wireguard.h"
 #include "userdb.h"
 #include "syscall.h"
 #include "fde.h"
@@ -165,7 +164,6 @@ static void cmd_proc_widget(const char* args);
 static void cmd_net_widget(const char* args);
 static void cmd_netstack(const char* args);
 static void cmd_dns(const char* args);
-static void cmd_vpn(const char* args);
 static void cmd_ping(const char* args);
 static void cmd_arp(const char* args);
 static void cmd_curl(const char* args);
@@ -205,10 +203,8 @@ static void cmd_mount(const char* args);
 static void cmd_umount(const char* args);
 static void cmd_fstype(const char* args);
 static void cmd_airmesh(const char* args);
-static void cmd_tots(const char* args);
 static void cmd_neural(const char* args);
 static void cmd_ghost(const char* args);
-static void cmd_runtime(const char* args);
 static void print_u32(u32 value);
 static void print_u64(u64 value);
 static const char* skip_space(const char* s);
@@ -371,7 +367,6 @@ static const cmd_def_t cmds[] = {
     { "net", "Network monitor actions", "net status|net connect [ip mask gw]|net disconnect|net throttle <app>|net optimize", 0, cmd_net_widget },
     { "netstack", "Kernel network stack control", "netstack status|arp [n]|route [n]|route add <net> <mask> <gw> <metric>|sock open <tcp|udp> <lport> <rip> <rport>|sock send <id> [data]|sock recv <id>|sock close <id>|sock list", 0, cmd_netstack },
     { "dns", "Configure DNS servers and cache", "dns show|set <slot 0..2> <ipv4>|reset|cache clear", 0, cmd_dns },
-    { "vpn", "Configure WireGuard profile", "vpn show|configure <endpoint> <port> <private-key-hex> <peer-key-hex> <network> <mask>|start|stop|clear", 0, cmd_vpn },
     { "av", "Antivirus widget actions", "av scan <path>|av quarantine <pid>", 0, cmd_av_widget },
     { "fw", "Firewall widget actions", "fw status|fw block <ip>|fw allow <app>", "firewall", cmd_fw_widget },
     { "logs", "Logs and alerts actions", "logs view <type>|logs export", 0, cmd_logs_widget },
@@ -401,11 +396,9 @@ static const cmd_def_t cmds[] = {
     { "umount", "Unmount a filesystem", "umount <path>", 0, cmd_umount },
     { "fstype", "Format a disk partition with a Linux-compatible filesystem", "fstype <minix|ext2|ext4|vfat> <start_lba> <total_lba>", 0, cmd_fstype },
     { "mkfs", "Format (alias for fstype)", "mkfs <minix|ext2|ext4|vfat> <start_lba> <total_lba>", 0, cmd_fstype },
-    { "airmesh", "AirMesh Sovereign Layer-2 Mesh Protocol", "airmesh status|beacon|send <target_node> <msg>", 0, cmd_airmesh },
-    { "tots", "Traffic-Obfuscation Transport Subsystem", "tots status|enable|disable", 0, cmd_tots },
+    { "airmesh", "AirMesh Layer-2 Mesh Protocol (experimental)", "airmesh status|beacon|send <target_node> <msg>", 0, cmd_airmesh },
     { "neural", "Neural Predictive Prefetch AI Engine", "neural status|train", 0, cmd_neural },
-    { "ghost", "HyperGhost Zero-Watt State & Memory Compression", "ghost status|freeze <task>|thaw <task>", 0, cmd_ghost },
-    { "runtime", "Universal Direct-Metal Multi-Binary Runtime", "runtime status", 0, cmd_runtime }
+    { "ghost", "HyperGhost Zero-Watt State & Memory Compression", "ghost status|freeze <task>|thaw <task>", 0, cmd_ghost }
 };
 
 #define CMD_COUNT ((u32)(sizeof(cmds) / sizeof(cmds[0])))
