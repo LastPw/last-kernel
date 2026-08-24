@@ -164,6 +164,7 @@ static void cmd_proc_widget(const char* args);
 static void cmd_net_widget(const char* args);
 static void cmd_netstack(const char* args);
 static void cmd_dns(const char* args);
+static void cmd_vpn(const char* args);
 static void cmd_ping(const char* args);
 static void cmd_arp(const char* args);
 static void cmd_curl(const char* args);
@@ -367,6 +368,7 @@ static const cmd_def_t cmds[] = {
     { "net", "Network monitor actions", "net status|net connect [ip mask gw]|net disconnect|net throttle <app>|net optimize", 0, cmd_net_widget },
     { "netstack", "Kernel network stack control", "netstack status|arp [n]|route [n]|route add <net> <mask> <gw> <metric>|sock open <tcp|udp> <lport> <rip> <rport>|sock send <id> [data]|sock recv <id>|sock close <id>|sock list", 0, cmd_netstack },
     { "dns", "Configure DNS servers and cache", "dns show|set <slot 0..2> <ipv4>|reset|cache clear", 0, cmd_dns },
+    { "vpn", "WireGuard VPN tunnel (in-kernel Noise_IK)", "vpn show|configure <endpoint-ip> <port> <private-key-hex> <peer-key-hex> <network> <mask>|start|stop|send <text>|clear", 0, cmd_vpn },
     { "av", "Antivirus widget actions", "av scan <path>|av quarantine <pid>", 0, cmd_av_widget },
     { "fw", "Firewall widget actions", "fw status|fw block <ip>|fw allow <app>", "firewall", cmd_fw_widget },
     { "logs", "Logs and alerts actions", "logs view <type>|logs export", 0, cmd_logs_widget },

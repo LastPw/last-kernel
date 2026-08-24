@@ -1,5 +1,7 @@
 /* Network, HTTP, TLS, and diagnostics command handlers. */
 #include "airmesh.h"
+#include "wireguard.h"
+#include "ip.h"
 
 static void cmd_dns(const char* args) {
     char sub[16], slot_text[16], ip_text[32];
@@ -40,6 +42,123 @@ static void cmd_dns(const char* args) {
         return;
     }
     kputs("Usage: dns show|set <slot 0..2> <ipv4>|reset|cache clear\n");
+}
+
+static int wg_parse_hex_key(const char* text, u8 out[32]) {
+    if (!text || !out || str_len(text) != 64u) return -1;
+    for (u32 i = 0u; i < 32u; i++) {
+        u8 hi, lo;
+        char a = text[i * 2u], b = text[i * 2u + 1u];
+        if (a >= '0' && a <= '9') hi = (u8)(a - '0');
+        else if (a >= 'a' && a <= 'f') hi = (u8)(a - 'a' + 10);
+        else if (a >= 'A' && a <= 'F') hi = (u8)(a - 'A' + 10);
+        else return -1;
+        if (b >= '0' && b <= '9') lo = (u8)(b - '0');
+        else if (b >= 'a' && b <= 'f') lo = (u8)(b - 'a' + 10);
+        else if (b >= 'A' && b <= 'F') lo = (u8)(b - 'A' + 10);
+        else return -1;
+        out[i] = (u8)((hi << 4u) | lo);
+    }
+    return 0;
+}
+
+static void cmd_vpn(const char* args) {
+    char sub[16], endpoint_text[32], port_text[16], private_text[80], peer_text[80];
+    char net_text[32], mask_text[32], text_buf[256];
+    wireguard_status_t st;
+
+    args = read_token(skip_space(args), sub, sizeof(sub));
+    if (sub[0] == 0 || str_cmp(sub, "show") == 0 || str_cmp(sub, "status") == 0) {
+        wireguard_status(&st);
+        kputs("WireGuard in-kernel (Noise_IKpsk2 over UDP)\n");
+        kputs("configured: "); kputs(st.configured ? "yes" : "no");
+        kputs(" | session: "); kputs(st.active ? "ESTABLISHED" : "down");
+        if (st.active) {
+            kputs(st.role_last_handshake == 1 ? " (initiator)" : " (responder)");
+        }
+        kputc('\n');
+        if (st.configured) {
+            char ep[32];
+            ip_format_ipv4(st.endpoint_ip, ep, sizeof(ep));
+            char nb[32], mb[32];
+            ip_format_ipv4(st.allowed_network, nb, sizeof(nb));
+            ip_format_ipv4(st.allowed_mask, mb, sizeof(mb));
+            kputs("endpoint="); kputs(ep); kputc(':'); print_u32(st.endpoint_port);
+            kputs(" listen="); print_u32(st.listen_port);
+            kputs(" allowed="); kputs(nb); kputc('/'); kputs(mb); kputc('\n');
+        }
+        kputs("handshakes="); print_u32(st.handshake_count);
+        kputs(" tx_pkts="); print_u32((u32)st.tx_packets);
+        kputs(" rx_pkts="); print_u32((u32)st.rx_packets);
+        kputs("\nreplay_drops="); print_u32(st.replay_drops);
+        kputs(" auth_failures="); print_u32(st.auth_failures);
+        kputc('\n');
+        return;
+    }
+    if (str_cmp(sub, "configure") == 0) {
+        u8 priv_key[32], peer_key[32];
+        u32 endpoint_ip, port = 0u, network, mask;
+        int ok = 0;
+        args = read_token(skip_space(args), endpoint_text, sizeof(endpoint_text));
+        args = read_token(skip_space(args), port_text, sizeof(port_text));
+        args = read_token(skip_space(args), private_text, sizeof(private_text));
+        args = read_token(skip_space(args), peer_text, sizeof(peer_text));
+        args = read_token(skip_space(args), net_text, sizeof(net_text));
+        (void)read_token(skip_space(args), mask_text, sizeof(mask_text));
+        endpoint_ip = ip_parse_ipv4(endpoint_text, &ok);
+        if (!ok) { kputs("vpn: invalid endpoint IP\n"); return; }
+        if (parse_u32(port_text, &port) != 0 || port == 0u || port > 65535u) {
+            kputs("vpn: invalid port\n"); return;
+        }
+        if (wg_parse_hex_key(private_text, priv_key) != 0 ||
+            wg_parse_hex_key(peer_text, peer_key) != 0) {
+            kputs("vpn: keys must be 64 hex chars\n"); return;
+        }
+        network = ip_parse_ipv4(net_text, &ok);
+        if (!ok) { kputs("vpn: invalid allowed network\n"); return; }
+        mask = ip_parse_ipv4(mask_text, &ok);
+        if (!ok || mask == 0u) { kputs("vpn: invalid allowed mask\n"); return; }
+        if (wireguard_configure(endpoint_ip, (u16)port, priv_key, peer_key,
+                                0, network, mask) != 0) {
+            kputs("vpn: configuration rejected\n");
+            return;
+        }
+        {
+            volatile u8* zp = (volatile u8*)priv_key;
+            for (u32 z = 0u; z < sizeof(priv_key); z++) zp[z] = 0u;
+        }
+        kputs("WireGuard peer configured; use 'vpn start'\n");
+        return;
+    }
+    if (str_cmp(sub, "start") == 0) {
+        kputs(wireguard_start() == 0 ? "WireGuard starting; handshake initiated\n"
+                                     : "vpn: not configured\n");
+        return;
+    }
+    if (str_cmp(sub, "stop") == 0) {
+        (void)wireguard_stop();
+        kputs("WireGuard stopped\n");
+        return;
+    }
+    if (str_cmp(sub, "clear") == 0) {
+        wireguard_clear_keys();
+        kputs("WireGuard keys erased\n");
+        return;
+    }
+    if (str_cmp(sub, "send") == 0) {
+        const char* msg = skip_space(args);
+        if (!msg[0]) { kputs("Usage: vpn send <text>\n"); return; }
+        u32 len = str_len(msg);
+        if (len > 200u) len = 200u;
+        memcpy(text_buf, msg, len);
+        if (wireguard_send_data(text_buf, (u16)len) == 0) {
+            kputs("encrypted and sent over tunnel\n");
+        } else {
+            kputs("send failed (no active session?)\n");
+        }
+        return;
+    }
+    kputs("Usage: vpn show|configure <endpoint-ip> <port> <private-key-hex> <peer-key-hex> <network> <mask>|start|stop|send <text>|clear\n");
 }
 
 static void cmd_netstack(const char* args) {

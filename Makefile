@@ -107,6 +107,7 @@ C_OBJS := \
 	$(BUILD_DIR)/dns_server.o \
 	$(BUILD_DIR)/dhcp_server.o \
 	$(BUILD_DIR)/airmesh.o \
+	$(BUILD_DIR)/wireguard.o \
 	$(BUILD_DIR)/httpd.o \
 	$(BUILD_DIR)/xhci.o \
 	$(BUILD_DIR)/usb_ohci.o \
@@ -141,6 +142,8 @@ C_OBJS := \
 	$(BUILD_DIR)/self_heal.o \
 	$(BUILD_DIR)/fde.o \
 	$(BUILD_DIR)/sha256.o \
+	$(BUILD_DIR)/blake2s.o \
+	$(BUILD_DIR)/noise_ik.o \
 	$(BUILD_DIR)/tpm2.o \
 	$(BUILD_DIR)/epoll.o \
 	$(BUILD_DIR)/io_scheduler.o \
@@ -489,6 +492,9 @@ $(BUILD_DIR)/dhcp_server.o: net/dhcp_server.c | $(BUILD_DIR)
 $(BUILD_DIR)/airmesh.o: net/airmesh.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/wireguard.o: net/wireguard.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/httpd.o: net/httpd.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -589,6 +595,12 @@ $(BUILD_DIR)/fde.o: kernel/security/fde.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/sha256.o: crypto/sha256.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/blake2s.o: crypto/blake2s.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/noise_ik.o: crypto/noise_ik.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/tpm2.o: kernel/security/tpm2.c | $(BUILD_DIR)
@@ -882,6 +894,15 @@ test:
 	./$(BUILD_DIR)/tests/fde_aes_kat
 	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/lastfs_tests tests/lastfs_tests.c
 	./$(BUILD_DIR)/tests/lastfs_tests
+	@mkdir -p $(BUILD_DIR)/tests/bearssl_obj
+	@for f in $(BEARSSL_SRCS); do \
+		gcc -O2 -w -I"$(CURDIR)/include/std" -I"$(CURDIR)/include" -I"$(CURDIR)/crypto/bearssl" \
+			-c "$$f" -o "$(BUILD_DIR)/tests/bearssl_obj/$$(basename $$f .c).o" || exit 1; \
+	done
+	ar rcs $(BUILD_DIR)/tests/libbearssl_host.a $(BUILD_DIR)/tests/bearssl_obj/*.o
+	gcc -O2 -Wall -Wextra -iquote include -Icrypto/bearssl -o $(BUILD_DIR)/tests/wg_noise_tests \
+		tests/wg_noise_tests.c crypto/blake2s.c crypto/noise_ik.c $(BUILD_DIR)/tests/libbearssl_host.a
+	./$(BUILD_DIR)/tests/wg_noise_tests
 	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/wg_noise_tests tests/wg_noise_tests.c crypto/blake2s.c crypto/noise_ik.c
 	./$(BUILD_DIR)/tests/wg_noise_tests
 

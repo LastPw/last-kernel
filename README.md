@@ -44,8 +44,9 @@
 - AirMesh (`net/airmesh.c`): *experimental* L2 beacon/text protocol over Ethernet — a toy, not mesh routing.
 
 ### Security & Crypto
+- **In-kernel WireGuard v1** (`net/wireguard.c`, `crypto/noise_ik.c`): spec-exact Noise_IKpsk2 handshake (X25519 via BearSSL, HMAC-BLAKE2s KDF, ChaCha20-Poly1305 transport), TAI64N replay-resistant timestamps with flood guard, 2048-bit sliding replay window, retry/rekey/keepalive timers, MAC1 authentication. Covered by host-side vectors: RFC 7693 BLAKE2s KATs, RFC 7748 X25519 §6.1, full dual-role handshake exchange, tamper + wrong-key rejection (`tests/wg_noise_tests.c`).
 - Full disk encryption: AES-XTS + PBKDF2 (`kernel/security/fde.c`), validated against known-answer test vectors via `make test`.
-- SHA-256, vendored BearSSL for TLS.
+- SHA-256 and BLAKE2s (`crypto/blake2s.c`), vendored BearSSL for TLS.
 - Stack canary protection, IRQ rate limiting, task pointer/context validation.
 - cgroups, namespaces, sandboxing hooks; audit log; threat event ring buffer.
 - Heuristic risk scoring (`kernel/security/ai_security.c`, `kernel/security/kshield.c`) — rule-based scoring over live telemetry, not machine learning.
@@ -58,6 +59,7 @@
 ---
 
 ## Partial / Known Limitations
+- **WireGuard**: message-oriented data API + shell (`vpn` command); no IP-layer tunnel routing yet, no mac2/cookie replies under load, no roaming, single peer.
 - **TCP** is minimal: no retransmission timers or sliding window yet.
 - **TPM2** (`kernel/security/tpm2.c`): real SHA-256 seal/unseal logic, but no TIS hardware I/O — PCR values are software-derived.
 - **Antivirus scanner**: real scanning/quarantine plumbing, toy signature set.
@@ -65,6 +67,7 @@
 - **Linux compat**: syscall translation surface only; no dynamic-linker support.
 
 ## Not Implemented (roadmap)
+- WireGuard IP-layer tunneling (route allowed-network packets through the session).
 - Robust TCP (retransmit, congestion control).
 - eBPF, kprobes, io_uring (removed as non-functional stubs; to be reimplemented properly or not at all).
 - ACPI power management, hotplug.
