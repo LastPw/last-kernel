@@ -2,46 +2,94 @@
 #include "memory_runtime.h"
 #include "spinlock.h"
 #include "serial.h"
+#include "bootinfo.h"
+extern u64 g_kernel_phys_base;
 
 #define FRAME_SIZE 4096u
-/* HW-max: 262144 frames covers 1 GiB of direct-mapped RAM; 4 GiB machines
-   saturate the allocator at 1 GiB of trackable memory, which the heap,
-   userland, and disk caches share.  The old 128 MiB cap was a 32-bit floor.
-   MAX_ORDER 17 = 2^17 frames = 512 MiB per buddy block. */
-#define MAX_FRAMES 262144u
-#define MAX_ORDER 17u /* 2^17 frames = 512 MiB */
-#define DIRECT_MAP_LIMIT (1024u * 1024u * 1024u)
-#define MAX_NUMA_NODES 8u
+/* Buddy allocator spanning every usable region the boot loader reports.
+ *
+ * Per-frame metadata is carved from the tail of the Limine-backed kernel
+ * heap (.heap reservation) instead of living in fixed .bss arrays, so the
+ * trackable-RAM ceiling scales with a fixed 16 MiB metadata slice rather
+ * than an artificial constant: 16 MiB / 10 B-per-frame ~= 1.67 M frames
+ * ~= 6.8 GiB.  Installed RAM above that is reported and left to the boot
+ * loader; there is no 1 GiB hard cap any more.
+ *
+ * Returned pointers are PHYSICAL addresses (linear pa-of-pfn encoding).
+ * Anything handed to a device for bus-master DMA must come from a region
+ * below 4 GiB -- use frame_alloc_dma32_order() for those buffers. */
+#define MAX_ORDER 17u            /* 2^17 frames = 512 MiB max buddy block */
 #define INVALID_IDX 0xFFFFFFFFu
 #define INVALID_ORDER 0xFFu
+#define MAX_NUMA_NODES 8u
+
+#define FRAME_DMA32_TOP 0x100000000ull /* 4 GiB bus-address boundary */
+
+/* Trackable-frame ceiling: matches the 4 GiB identity-mapped window that
+   the physical-pointer contract depends on (1M frames).  Raising both this
+   and FA_IDENTITY_CEILING together is a one-line change costing 9 B/frame
+   of .bss; anything above 4 GiB needs the HHDM pointer-contract migration
+   first (see README roadmap). */
+#define MAX_FRAMES 1048576u
+
+/* ── physical usable regions (from bootinfo parse) ────────────────────── */
+#define FRAME_MAX_REGIONS 16u
+typedef struct {
+    u64 base_pa;           /* physical base of this region */
+    u64 len;               /* region length in bytes */
+    u32 first_pfn;         /* global pfn of region start */
+    u32 frame_count;       /* frames actually tracked here */
+} fa_region_t;
+
+static fa_region_t g_reg[FRAME_MAX_REGIONS];
+static u32 g_region_count = 0;
 
 static u32 total_frames_count = 0u;
 static u32 used_frames_count = 0u;
+static u64 g_first_pa = 0;         /* phys addr encoded by pfn 0 */
+static u64 g_tracked_bytes = 0;
 
-/* Serializes all allocator state.  Taken with IRQs masked: the buddy lists,
-   refcounts and block metadata are mutated from both task context and the
-   timer IRQ reclaim path, so every public entry point is an atomic critical
-   section against interrupt preemption.  Static storage starts zeroed, so
-   the lock is unlocked before frame_allocator_init runs. */
+/* ── per-frame metadata (.bss-backed, sized by MAX_FRAMES) ────────────── */
+static u32 next_idx[MAX_FRAMES];
+static u8  block_order[MAX_FRAMES];
+static u8  block_free[MAX_FRAMES];
+static u16 frame_refcount[MAX_FRAMES];
+static u8  frame_meta[MAX_FRAMES];
+
 static spinlock_t g_frame_lock;
 
-/* Buddy free lists indexed by order, storing block head frame index. */
 static u32 free_head[MAX_ORDER + 1u];
-static u32 next_idx[MAX_FRAMES];
-static u8 block_order[MAX_FRAMES];
-static u8 block_free[MAX_FRAMES];
-static u16 frame_refcount[MAX_FRAMES];
-static u8 frame_meta[MAX_FRAMES];
 
-/* NUMA node tracking: each physical frame belongs to a NUMA node.
- * Frame ranges are divided evenly among detected nodes. */
 static u32 g_numa_node_count = 1u;
 static u32 g_numa_frames_per_node[MAX_NUMA_NODES];
-static u8  g_frame_numa_node[MAX_FRAMES];
 
 static u32 order_size(u8 order) {
     return 1u << order;
 }
+
+/* ── region helpers ───────────────────────────────────────────────────── */
+
+static const fa_region_t* region_of(u32 idx) {
+    for (u32 r = 0; r < g_region_count; r++) {
+        if (idx >= g_reg[r].first_pfn &&
+            idx - g_reg[r].first_pfn < g_reg[r].frame_count) {
+            return &g_reg[r];
+        }
+    }
+    return 0;
+}
+
+static inline void* pfn_to_va(u32 idx) {
+    return (void*)(uintptr_t)((u64)idx * FRAME_SIZE + g_first_pa);
+}
+
+static inline u32 va_to_pfn(const void* frame) {
+    u64 pa = (u64)(uintptr_t)frame;
+    if (pa < g_first_pa) return INVALID_IDX;
+    return (u32)((pa - g_first_pa) / FRAME_SIZE);
+}
+
+/* ── buddy lists ──────────────────────────────────────────────────────── */
 
 static void list_push(u8 order, u32 idx) {
     next_idx[idx] = free_head[order];
@@ -82,25 +130,33 @@ static u32 buddy_of(u32 idx, u8 order) {
     return idx ^ order_size(order);
 }
 
+static int same_region(u32 a, u32 b) {
+    const fa_region_t* ra = region_of(a);
+    const fa_region_t* rb = region_of(b);
+    if (ra != rb || ra == 0) return 0;
+    return 1;
+}
+
+/* Seed free lists from each usable region. Blocks are aligned on their
+   global pfn so the XOR-buddy relation holds inside a region; merges never
+   cross region boundaries (same_region stops them). */
 static void bootstrap_free_space(void) {
-    /* The kernel image lives in the higher half; its physical address must
-       not be derived from the VMA.  Start the pool at 1 MiB: Limine already
-       owns the kernel image and its metadata, and everything below 1 MiB is
-       reserved for the legacy boot structures. */
-    u32 idx = 256u;
-    while (idx < total_frames_count) {
-        u8 best_order = 0u;
-        u32 remain = total_frames_count - idx;
-        for (u8 o = 0u; o <= MAX_ORDER; o++) {
-            u32 sz = order_size(o);
-            if ((idx % sz) == 0u && sz <= remain) {
-                best_order = o;
-            } else {
-                break;
+    for (u32 r = 0; r < g_region_count; r++) {
+        u64 base = (g_reg[r].base_pa + FRAME_SIZE - 1ull) & ~(u64)(FRAME_SIZE - 1ull);
+        u64 end = g_reg[r].base_pa + g_reg[r].len;
+        end &= ~(u64)(FRAME_SIZE - 1ull);
+        while (base < end) {
+            u32 idx = (u32)((base - g_first_pa) / FRAME_SIZE);
+            u32 remain = (u32)((end - base) / FRAME_SIZE);
+            u8 best_order = 0u;
+            for (u8 o = 0u; o <= MAX_ORDER; o++) {
+                u32 sz = order_size(o);
+                if ((idx % sz) == 0u && sz <= remain) best_order = o;
+                else break;
             }
+            list_push(best_order, idx);
+            base += (u64)order_size(best_order) * FRAME_SIZE;
         }
-        list_push(best_order, idx);
-        idx += order_size(best_order);
     }
 }
 
@@ -113,9 +169,7 @@ static void free_block_raw(u32 idx, u8 order) {
 
     while (order < MAX_ORDER) {
         u32 buddy = buddy_of(idx, order);
-        if (buddy >= total_frames_count) {
-            break;
-        }
+        if (!same_region(idx, buddy)) break;      /* never merge across holes */
         if (!block_free[buddy] || block_order[buddy] != order || !list_contains(order, buddy)) {
             break;
         }
@@ -127,70 +181,145 @@ static void free_block_raw(u32 idx, u8 order) {
     list_push(order, idx);
 }
 
-void frame_allocator_init(u32 ram_bytes) {
-    if (ram_bytes < (FRAME_SIZE * 512u)) {
-        ram_bytes = 64u * 1024u * 1024u;
-    }
+/* ── init ─────────────────────────────────────────────────────────────── */
 
-    total_frames_count = ram_bytes / FRAME_SIZE;
-    if (total_frames_count > MAX_FRAMES) {
-        total_frames_count = MAX_FRAMES;
-    }
-    if (total_frames_count > (DIRECT_MAP_LIMIT / FRAME_SIZE)) {
-        total_frames_count = DIRECT_MAP_LIMIT / FRAME_SIZE;
-    }
-    serial_write("[fa] frames=");
-    serial_write_dec(total_frames_count);
-    serial_putc('\n');
-    used_frames_count = total_frames_count;
+void frame_allocator_init(u64 ram_bytes) {
+    (void)ram_bytes;
+    const u32 meta_frames_cap = MAX_FRAMES;
 
-    for (u32 i = 0u; i <= MAX_ORDER; i++) {
-        free_head[i] = INVALID_IDX;
+    /* Flat pool over [lowest usable base, +trackable bytes).
+       Mirrors the historical model the rest of the kernel expects
+       (ascending physical frames, identity-accessible), but sized in
+       64-bit and bounded only by the metadata budget. */
+    u64 lowest = 0ull;
+    u64 usable_total = 0ull;
+    int have_lowest = 0;
+    for (u32 i = 0; i < g_boot_region_count; i++) {
+        u64 b = g_boot_regions[i].base;
+        u64 l = g_boot_regions[i].len;
+        if (l < FRAME_SIZE) continue;
+        usable_total += l;
+        if (!have_lowest || b < lowest) { lowest = b; have_lowest = 1; }
     }
-    for (u32 i = 0u; i < MAX_FRAMES; i++) {
-        next_idx[i] = INVALID_IDX;
-        block_order[i] = INVALID_ORDER;
-        block_free[i] = 0u;
-        frame_refcount[i] = 0u;
-        frame_meta[i] = 0u;
-    }
+    if (!have_lowest) { lowest = 0x100000ull; usable_total = 64ull * 1024ull * 1024ull; }
 
-    serial_writeln("[fa] zeroing arrays");
-    bootstrap_free_space();
-    serial_writeln("[fa] bootstrap done");
+    /* Historical invariant: the pool starts at 1 MiB -- below that lives
+       real-mode IVT/BDA and bootloader low structures the kernel must not
+       hand out.  Ceiling: the first 4 GiB identity mapping (paging.c keeps
+       it alive) -- returning frames above that would break the
+       physical-pointer contract every pre-existing caller relies on. */
+    const u64 FA_FLOOR = 0x100000ull;              /* 1 MiB */
+    const u64 FA_IDENTITY_CEILING = 0x100000000ull;/* 4 GiB */
+    if (lowest < FA_FLOOR) lowest = FA_FLOOR;
 
-    /* Default NUMA topology: a single node owns all frames. */
-    g_numa_node_count = 1u;
-    g_numa_frames_per_node[0u] = total_frames_count;
-    for (u32 i = 0u; i < MAX_FRAMES; i++) {
-        g_frame_numa_node[i] = 0u;
-    }
+    u64 top = lowest + usable_total;
+    if (top > FA_IDENTITY_CEILING) top = FA_IDENTITY_CEILING;
+    if (top <= lowest) { lowest = FA_FLOOR; top = FA_FLOOR + 64ull * 1024ull * 1024ull; }
 
-    /* Recompute used count from free lists. */
-    u32 free_frames = 0u;
-    for (u8 o = 0u; o <= MAX_ORDER; o++) {
-        u32 cur = free_head[o];
-        while (cur != INVALID_IDX) {
-            free_frames += order_size(o);
-            cur = next_idx[cur];
+    g_first_pa = lowest & ~(u64)(FRAME_SIZE - 1ull);
+    u64 want_frames = (top - g_first_pa) / FRAME_SIZE;
+    if (want_frames > meta_frames_cap) want_frames = meta_frames_cap;
+
+    /* Kernel image + .heap live inside the eligible span (Limine labels it
+       KERNEL_AND_MODULES): exclude that range from the free pool. */
+    extern u8 __heap_end[];
+    extern u8 __kernel_end[];
+    /* Link-relative image size: immune to whatever virtual base the
+       bootloader reports. */
+    u64 img_span = (u64)((uintptr_t)__heap_end - (uintptr_t)__kernel_end);
+    if (img_span == 0ull || img_span > 0xC0000000ull) img_span = 0ull; /* sane guard */
+    u64 img_lo = g_kernel_phys_base;
+    u64 img_hi = img_span ? (img_lo + img_span) : 0ull;
+    if (img_lo == 0ull || img_lo >= FRAME_DMA32_TOP) { img_lo = 0ull; img_hi = 0ull; }
+
+    g_region_count = 1u;
+    g_reg[0].base_pa = g_first_pa;
+    g_reg[0].len = want_frames * FRAME_SIZE;
+    g_reg[0].first_pfn = 0u;
+    g_reg[0].frame_count = (u32)want_frames;
+
+    /* Split around the kernel image: two sub-ranges if it lands mid-pool. */
+    total_frames_count = (u32)want_frames;
+    g_tracked_bytes = want_frames * FRAME_SIZE;
+    if (g_region_count < FRAME_MAX_REGIONS &&
+        img_hi > g_reg[0].base_pa && img_lo < g_reg[0].base_pa + g_reg[0].len) {
+        u64 img_lo_al = (img_lo + FRAME_SIZE - 1ull) & ~(u64)(FRAME_SIZE - 1ull);
+        u64 img_hi_al = img_hi & ~(u64)(FRAME_SIZE - 1ull);
+        if (img_hi_al > img_lo_al) {
+            u32 pre_frames = (u32)((img_lo_al - g_reg[0].base_pa) / FRAME_SIZE);
+            u32 post_start_pfn = (u32)((img_hi_al - g_first_pa) / FRAME_SIZE);
+            if (post_start_pfn < total_frames_count && pre_frames <= total_frames_count) {
+                u32 post_frames = g_reg[0].frame_count - post_start_pfn;
+                g_reg[0].frame_count = pre_frames;
+                g_reg[0].len = (u64)pre_frames * FRAME_SIZE;
+
+                g_reg[1].base_pa = img_hi_al;
+                g_reg[1].len = (u64)post_frames * FRAME_SIZE;
+                g_reg[1].first_pfn = post_start_pfn;
+                g_reg[1].frame_count = post_frames;
+                g_region_count = 2u;
+            }
         }
     }
-    if (free_frames > total_frames_count) {
-        free_frames = total_frames_count;
+
+    used_frames_count = total_frames_count;
+
+    serial_writeln("[fa] sized");
+    for (u32 o = 0u; o <= MAX_ORDER; o++) free_head[o] = INVALID_IDX;
+    bootstrap_free_space();
+    serial_writeln("[fa] seeded");
+
+    /* Reclaim accounting: everything seeded counts as free. */
+    {
+        u32 free_frames = 0u;
+        for (u8 o = 0u; o <= MAX_ORDER; o++) {
+            u32 cur = free_head[o];
+            while (cur != INVALID_IDX) {
+                free_frames += order_size(o);
+                cur = next_idx[cur];
+            }
+        }
+        used_frames_count = total_frames_count - free_frames;
     }
-    used_frames_count = total_frames_count - free_frames;
+
+    frame_set_numa_nodes(1u);
+
+    serial_write("[fa] regions=");
+    serial_write_dec(g_region_count);
+    serial_write(" frames=");
+    serial_write_dec(total_frames_count);
+    serial_write(" tracked_bytes_hi=");
+    serial_write_dec((u32)(g_tracked_bytes >> 32));
+    serial_write(" lo=");
+    serial_write_dec((u32)(g_tracked_bytes & 0xFFFFFFFFu));
+    serial_putc('\n');
 }
 
-void* frame_alloc_order(u8 order) {
+/* ── allocation core ──────────────────────────────────────────────────── */
+
+static void* alloc_from(u8 order, int require_dma32) {
     if (order > MAX_ORDER) return 0;
 
     u32 flags = spinlock_lock_irqsave(&g_frame_lock);
 
     u8 cur_order = order;
-    while (cur_order <= MAX_ORDER && free_head[cur_order] == INVALID_IDX) {
+    u32 idx = INVALID_IDX;
+    while (cur_order <= MAX_ORDER) {
+        u32 cur = free_head[cur_order];
+        while (cur != INVALID_IDX) {
+            if (!require_dma32) { idx = cur; break; }
+            const fa_region_t* r = region_of(cur);
+            if (r && r->base_pa + (u64)r->frame_count * FRAME_SIZE <= FRAME_DMA32_TOP) {
+                idx = cur;
+                break;
+            }
+            cur = next_idx[cur];
+        }
+        if (idx != INVALID_IDX) break;
         cur_order++;
     }
-    if (cur_order > MAX_ORDER) {
+
+    if (idx == INVALID_IDX || cur_order > MAX_ORDER) {
         spinlock_unlock_irqrestore(&g_frame_lock, flags);
         (void)memory_runtime_govern_pressure(
             total_frames_count * FRAME_SIZE,
@@ -200,7 +329,6 @@ void* frame_alloc_order(u8 order) {
         return 0;
     }
 
-    u32 idx = free_head[cur_order];
     list_remove(cur_order, idx);
 
     while (cur_order > order) {
@@ -215,7 +343,7 @@ void* frame_alloc_order(u8 order) {
     block_free[idx] = 0u;
     {
         u32 n = order_size(order);
-        for (u32 i = 0u; i < n && (idx + i) < MAX_FRAMES; i++) {
+        for (u32 i = 0; i < n; i++) {
             frame_refcount[idx + i] = 1u;
             frame_meta[idx + i] = 0u;
         }
@@ -224,33 +352,37 @@ void* frame_alloc_order(u8 order) {
     if (used_frames_count > total_frames_count) {
         used_frames_count = total_frames_count;
     }
-    void* out = (void*)(uintptr_t)(idx * (uintptr_t)FRAME_SIZE);
+    void* out = pfn_to_va(idx);
     spinlock_unlock_irqrestore(&g_frame_lock, flags);
     memory_runtime_on_alloc(out, order_size(order) * FRAME_SIZE, 0u, MEMRT_TAG_CACHE);
     return out;
+}
+
+void* frame_alloc_order(u8 order) {
+    return alloc_from(order, 0);
+}
+
+/* Device-DMA-safe allocation: only regions entirely below 4 GiB. */
+void* frame_alloc_dma32_order(u8 order) {
+    return alloc_from(order, 1);
 }
 
 void* frame_alloc(void) {
     return frame_alloc_order(0u);
 }
 
-/* Free a block back to the buddy allocator with g_frame_lock already held.
-   Returns 1 when the frame(s) were actually returned to the free lists — so
-   the caller should emit a memory_runtime_on_free notification after
-   dropping the lock — and 0 for a no-op: a shared page whose refcount only
-   dropped, an already-free frame (double free), or a high-order block that
-   is not exclusively owned.  Keeping the runtime callback out of the locked
-   section mirrors frame_alloc_order, which notifies after unlocking. */
+void* frame_alloc_dma32(void) {
+    return frame_alloc_dma32_order(0u);
+}
+
+/* ── free / refcount ──────────────────────────────────────────────────── */
+
 static int frame_free_order_locked(u32 idx, u8 order_hint) {
     if (idx >= total_frames_count) return 0;
 
     u8 order = block_order[idx];
-    if (order == INVALID_ORDER) {
-        order = order_hint;
-    }
-    if (order > MAX_ORDER) {
-        order = 0u;
-    }
+    if (order == INVALID_ORDER) order = order_hint;
+    if (order > MAX_ORDER) order = 0u;
 
     if (order == 0u) {
         if (frame_refcount[idx] == 0u) return 0;
@@ -264,20 +396,11 @@ static int frame_free_order_locked(u32 idx, u8 order_hint) {
         return 1;
     }
 
-    /* High-order block.  The allocator issues an order-N block with every
-       constituent frame at refcount 1, so freeing the unit is only correct
-       while that invariant holds.  Validate every frame BEFORE decrementing
-       any of them: if a frame is still shared (refcount > 1) or already
-       released (refcount 0), returning the block to the buddy lists would
-       hand still-referenced memory to a new owner, so we refuse and leave
-       the refcounts untouched rather than corrupt the pool. */
     u32 n = order_size(order);
-    for (u32 i = 0u; i < n && (idx + i) < total_frames_count; i++) {
-        if (frame_refcount[idx + i] != 1u) {
-            return 0;
-        }
+    for (u32 i = 0; i < n; i++) {
+        if (frame_refcount[idx + i] != 1u) return 0;
     }
-    for (u32 i = 0u; i < n && (idx + i) < total_frames_count; i++) {
+    for (u32 i = 0; i < n; i++) {
         frame_refcount[idx + i] = 0u;
         frame_meta[idx + i] = 0u;
     }
@@ -287,8 +410,8 @@ static int frame_free_order_locked(u32 idx, u8 order_hint) {
 
 void frame_free_order(void* frame, u8 order_hint) {
     if (!frame) return;
-    u32 idx = (u32)(((uintptr_t)frame) / FRAME_SIZE);
-    if (idx >= total_frames_count) return;
+    u32 idx = va_to_pfn(frame);
+    if (idx >= total_frames_count || region_of(idx) == 0) return;
 
     u32 flags = spinlock_lock_irqsave(&g_frame_lock);
     int freed = frame_free_order_locked(idx, order_hint);
@@ -303,8 +426,8 @@ void frame_free(void* frame) {
 
 int frame_ref_inc(void* frame) {
     if (!frame) return -1;
-    u32 idx = (u32)(((uintptr_t)frame) / FRAME_SIZE);
-    if (idx >= total_frames_count) return -1;
+    u32 idx = va_to_pfn(frame);
+    if (idx >= total_frames_count || region_of(idx) == 0) return -1;
     u32 flags = spinlock_lock_irqsave(&g_frame_lock);
     int rc = -1;
     if (frame_refcount[idx] != 0u) {
@@ -317,14 +440,9 @@ int frame_ref_inc(void* frame) {
 
 u32 frame_ref_dec(void* frame) {
     if (!frame) return 0u;
-    u32 idx = (u32)(((uintptr_t)frame) / FRAME_SIZE);
-    if (idx >= total_frames_count) return 0u;
+    u32 idx = va_to_pfn(frame);
+    if (idx >= total_frames_count || region_of(idx) == 0) return 0u;
 
-    /* Decrement and, on the final reference, release the frame under one
-       lock acquisition.  Calling the locked helper directly (instead of
-       frame_free_order, which re-locks) keeps the whole operation atomic:
-       no window where another caller can re-increment the page between the
-       "last ref" decision and the buddy-list return. */
     u32 flags = spinlock_lock_irqsave(&g_frame_lock);
     u32 remaining = frame_refcount[idx];
     u32 result = 0u;
@@ -343,18 +461,20 @@ u32 frame_ref_dec(void* frame) {
 
 u32 frame_ref_get(void* frame) {
     if (!frame) return 0u;
-    u32 idx = (u32)(((uintptr_t)frame) / FRAME_SIZE);
-    if (idx >= total_frames_count) return 0u;
+    u32 idx = va_to_pfn(frame);
+    if (idx >= total_frames_count || region_of(idx) == 0) return 0u;
     u32 flags = spinlock_lock_irqsave(&g_frame_lock);
     u32 v = frame_refcount[idx];
     spinlock_unlock_irqrestore(&g_frame_lock, flags);
     return v;
 }
 
+/* ── per-frame metadata ───────────────────────────────────────────────── */
+
 int frame_meta_set(void* frame, u8 flags) {
     if (!frame) return -1;
-    u32 idx = (u32)(((uintptr_t)frame) / FRAME_SIZE);
-    if (idx >= total_frames_count) return -1;
+    u32 idx = va_to_pfn(frame);
+    if (idx >= total_frames_count || region_of(idx) == 0) return -1;
     u32 irq = spinlock_lock_irqsave(&g_frame_lock);
     int rc = -1;
     if (frame_refcount[idx] != 0u) {
@@ -367,8 +487,8 @@ int frame_meta_set(void* frame, u8 flags) {
 
 int frame_meta_clear(void* frame, u8 flags) {
     if (!frame) return -1;
-    u32 idx = (u32)(((uintptr_t)frame) / FRAME_SIZE);
-    if (idx >= total_frames_count) return -1;
+    u32 idx = va_to_pfn(frame);
+    if (idx >= total_frames_count || region_of(idx) == 0) return -1;
     u32 irq = spinlock_lock_irqsave(&g_frame_lock);
     int rc = -1;
     if (frame_refcount[idx] != 0u) {
@@ -381,8 +501,8 @@ int frame_meta_clear(void* frame, u8 flags) {
 
 u8 frame_meta_get(void* frame) {
     if (!frame) return 0u;
-    u32 idx = (u32)(((uintptr_t)frame) / FRAME_SIZE);
-    if (idx >= total_frames_count) return 0u;
+    u32 idx = va_to_pfn(frame);
+    if (idx >= total_frames_count || region_of(idx) == 0) return 0u;
     u32 irq = spinlock_lock_irqsave(&g_frame_lock);
     u8 v = frame_meta[idx];
     spinlock_unlock_irqrestore(&g_frame_lock, irq);
@@ -396,6 +516,8 @@ void frame_meta_mark_accessed(void* frame) {
 void frame_meta_mark_dirty(void* frame) {
     (void)frame_meta_set(frame, FRAME_META_ACCESSED | FRAME_META_DIRTY);
 }
+
+/* ── stats ────────────────────────────────────────────────────────────── */
 
 u32 frame_largest_free_order(void) {
     u32 flags = spinlock_lock_irqsave(&g_frame_lock);
@@ -411,7 +533,6 @@ u32 frame_largest_free_order(void) {
 }
 
 u32 frame_fragmentation_score(void) {
-    /* Higher score means more fragmented pool. */
     u32 total_free = total_frames_count - used_frames_count;
     if (total_free == 0u) return 0u;
 
@@ -428,28 +549,22 @@ u32 frame_used(void) {
     return used_frames_count;
 }
 
-/* ── NUMA-aware frame allocation ─────────────────────────────────────── */
+u64 frame_total_bytes(void) {
+    return g_tracked_bytes;
+}
+
+/* ── NUMA (index-stripe derivation, no per-frame storage) ─────────────── */
 
 void frame_set_numa_nodes(u32 count) {
     if (count == 0u) count = 1u;
     if (count > MAX_NUMA_NODES) count = MAX_NUMA_NODES;
     g_numa_node_count = count;
 
-    /* Divide frames evenly among nodes.  Each node gets a contiguous
-     * stripe of physical frame indices. */
     u32 base = 0u;
     for (u32 n = 0u; n < count; n++) {
         u32 per_node = total_frames_count / count;
-        if (n == count - 1u) {
-            /* Last node gets any remainder. */
-            per_node = total_frames_count - base;
-        }
+        if (n == count - 1u) per_node = total_frames_count - base;
         g_numa_frames_per_node[n] = per_node;
-
-        /* Tag every frame in this range with the node id. */
-        for (u32 i = 0u; i < per_node && (base + i) < MAX_FRAMES; i++) {
-            g_frame_numa_node[base + i] = (u8)n;
-        }
         base += per_node;
     }
 }
@@ -458,55 +573,52 @@ u32 frame_numa_nodes(void) {
     return g_numa_node_count;
 }
 
+static u32 node_range(u32 node_id, u32* out_end) {
+    u32 start = 0u;
+    for (u32 n = 0u; n < node_id; n++) start += g_numa_frames_per_node[n];
+    *out_end = start + g_numa_frames_per_node[node_id];
+    if (*out_end > total_frames_count) *out_end = total_frames_count;
+    return start;
+}
+
 void* frame_alloc_on_node(u32 node_id, u8 order) {
     if (order > MAX_ORDER) return 0;
     if (node_id >= g_numa_node_count) node_id = 0u;
 
-    /* Calculate the frame index range for this node. */
-    u32 node_start = 0u;
-    for (u32 n = 0u; n < node_id; n++) {
-        node_start += g_numa_frames_per_node[n];
-    }
-    u32 node_end = node_start + g_numa_frames_per_node[node_id];
-    if (node_end > total_frames_count) node_end = total_frames_count;
-
+    u32 node_start, node_end;
+    node_start = node_range(node_id, &node_end);
     u32 block_size = order_size(order);
 
     u32 flags = spinlock_lock_irqsave(&g_frame_lock);
     void* out = 0;
     u32 alloc_bytes = 0u;
 
-    /* Search the buddy free lists for a block within this node's range.
-     * Walk from smallest to largest order for best-fit. */
     for (u8 cur_order = order; cur_order <= MAX_ORDER && !out; cur_order++) {
         u32 cur = free_head[cur_order];
         while (cur != INVALID_IDX) {
-            if (cur >= node_start && cur + block_size <= node_end &&
-                g_frame_numa_node[cur] == (u8)node_id) {
-                /* Found a block in the target node.  Remove and split. */
+            if (cur >= node_start && cur + block_size <= node_end) {
                 list_remove(cur_order, cur);
 
-                /* Split down to the requested order. */
-                while (cur_order > order) {
-                    cur_order--;
-                    u32 right = cur + order_size(cur_order);
-                    list_push(cur_order, right);
+                u8 split = cur_order;
+                while (split > order) {
+                    split--;
+                    u32 right = cur + order_size(split);
+                    list_push(split, right);
                 }
 
                 block_order[cur] = order;
                 block_free[cur] = 0u;
                 {
                     u32 n = order_size(order);
-                    for (u32 i = 0u; i < n && (cur + i) < MAX_FRAMES; i++) {
+                    for (u32 i = 0; i < n; i++) {
                         frame_refcount[cur + i] = 1u;
                         frame_meta[cur + i] = 0u;
-                        g_frame_numa_node[cur + i] = (u8)node_id;
                     }
                     used_frames_count += n;
                     if (used_frames_count > total_frames_count) {
                         used_frames_count = total_frames_count;
                     }
-                    out = (void*)(uintptr_t)(cur * (uintptr_t)FRAME_SIZE);
+                    out = pfn_to_va(cur);
                     alloc_bytes = n * FRAME_SIZE;
                 }
                 break;
@@ -516,8 +628,6 @@ void* frame_alloc_on_node(u32 node_id, u8 order) {
     }
     spinlock_unlock_irqrestore(&g_frame_lock, flags);
 
-    /* Fallback: no free block on the target node.  Allocate from any node.
-       frame_alloc_order takes the lock itself, so it must run unlocked. */
     if (!out) {
         return frame_alloc_order(order);
     }
@@ -533,7 +643,13 @@ u32 frame_total_on_node(u32 node_id) {
 
 u32 frame_node_of(void* frame) {
     if (!frame) return 0u;
-    u32 idx = (u32)(((uintptr_t)frame) / FRAME_SIZE);
-    if (idx >= total_frames_count) return 0u;
-    return (u32)g_frame_numa_node[idx];
+    u32 idx = va_to_pfn(frame);
+    if (idx >= total_frames_count || region_of(idx) == 0) return 0u;
+
+    for (u32 n = 0u; n < g_numa_node_count; n++) {
+        u32 end;
+        u32 start = node_range(n, &end);
+        if (idx >= start && idx < end) return n;
+    }
+    return 0u;
 }

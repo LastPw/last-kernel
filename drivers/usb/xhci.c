@@ -8,7 +8,6 @@
 #include "string.h"
 #include "timer.h"
 #include "frame_allocator.h"
-#include "usb_msc.h"
 
 /* ═══════════════════════════════════════════════════════════════
  *  xHCI v1 — HID keyboard & mouse via polling
@@ -122,8 +121,11 @@ static void usb_delay(u32 ms) {
     while ((u32)(timer_ticks() - start) < need && guard--) { }
 }
 
+/* All controller structures live below 4 GiB so 32-bit TRB bus
+   addresses stay valid even on machines with more RAM installed. */
 static void* dma_page(void) {
-    return frame_alloc_order(0u); /* 1 page = 4KB, physically contiguous */
+    /* 1 page = 4KB, physically contiguous, guaranteed < 4 GiB */
+    return frame_alloc_dma32_order(0u);
 }
 
 static void dma_free(void* p) {
@@ -336,7 +338,7 @@ int xhci_init(void) {
         u8 order = 0u;
         u32 sz_pages = dev_ctx_bytes;
         while (sz_pages > 4096u) { order++; sz_pages -= 4096u; }
-        g_x.dev_ctx = (u8*)frame_alloc_order(order);
+        g_x.dev_ctx = (u8*)frame_alloc_dma32_order(order);
         if (!g_x.dev_ctx) return -1;
         memset(g_x.dev_ctx, 0, dev_ctx_bytes);
         g_x.dev_ctx_pa = v2p(g_x.dev_ctx);

@@ -237,6 +237,12 @@ static int ohci_control_transfer(u8 address, u8 low_speed, u16 max_packet,
 
 static int ohci_bulk_transfer(u8 endpoint, u8 low_speed, u16 max_packet,
                               u8 in, u8* data, u16 length) {
+    /* OHCI TD bus addresses are 32-bit: reject high buffers outright. */
+    if (((uintptr_t)data & 0xFFFFFFFF00000000ull) != 0ull ||
+        (((uintptr_t)data + length) & 0xFFFFFFFF00000000ull) != 0ull) {
+        return -1;
+    }
+
     ohci_td_t* td = &g_bulk_td[0];
     ohci_td_t* tail = &g_bulk_td[1];
     if (!g_usb.controller_ready || !data || !length || max_packet == 0u || max_packet > 64u) return -1;

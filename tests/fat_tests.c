@@ -39,6 +39,7 @@ void* adv_alloc(size_t size) { return malloc(size); }
 void adv_free(void* p) { free(p); }
 
 #define str_cmp(a, b) strcmp((a), (b))
+#define str_len(s) strlen(s)
 #define str_ncpy(d, s, n) do { strncpy((d), (s), (n)); (d)[(n) ? (n) - 1 : 0] = 0; } while (0)
 
 /* Minimal VFS types normally pulled from include/vfs.h */
@@ -192,6 +193,90 @@ static void test_persistence(void) {
     assert(fat_read(g_fs, "/KEEP.BIN", out, (u32)strlen(msg)) == (int)strlen(msg));
     assert(strcmp(out, msg) == 0);
     printf("  [8/9] Write-through persistence across remount... PASS\n");
+}
+
+static void test_lfn_basic(void) {
+    /* mixed-case name -> needs LFN for case preservation */
+    assert(fat_create(g_fs, "/LongFileName.TXT", 0) == 0);
+    const char* msg = "long name payload";
+    assert(fat_write(g_fs, "/LongFileName.TXT", msg, strlen(msg)) == 0);
+    char out[64];
+    memset(out, 0, sizeof(out));
+    assert(fat_read(g_fs, "/LongFileName.TXT", out, (u32)strlen(msg)) == (int)strlen(msg));
+    assert(strcmp(out, msg) == 0);
+
+    /* listing must preserve case */
+    vfs_node_info_t list[16];
+    int n = fat_list(g_fs, "/", list, 16);
+    int seen = 0;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(list[i].name, "LongFileName.TXT") == 0) seen = 1;
+        assert(strcmp(list[i].name, "LONGFILENAME.TXT") != 0); /* no upper-casing */
+    }
+    assert(seen);
+
+    /* lookup is still case-insensitive */
+    memset(out, 0, sizeof(out));
+    assert(fat_read(g_fs, "/longfilename.txt", out, (u32)strlen(msg)) == (int)strlen(msg));
+    printf("  [10/13] LFN create/write/read + case-preserving list... PASS\n");
+}
+
+static void test_lfn_multislot(void) {
+    /* 30 chars -> needs ceil(30/13)=3 LFN slots + short entry */
+    assert(fat_create(g_fs, "/averyveryverylongfilename.dat", 0) == 0);
+    const char* msg = "multi-slot";
+    assert(fat_write(g_fs, "/averyveryverylongfilename.dat", msg, strlen(msg)) == 0);
+
+    char out[64];
+    memset(out, 0, sizeof(out));
+    assert(fat_read(g_fs, "/AVERYVERYVERYLONGFILENAME.DAT", out, (u32)strlen(msg)) == (int)strlen(msg));
+
+    vfs_node_info_t list[16];
+    int n = fat_list(g_fs, "/", list, 16);
+    int seen = 0;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(list[i].name, "averyveryverylongfilename.dat") == 0) seen = 1;
+    }
+    assert(seen);
+    printf("  [11/13] Multi-slot LFN (3 entries, 30 chars)... PASS\n");
+}
+
+static void test_lfn_delete_and_ghosts(void) {
+    assert(fat_delete(g_fs, "/LongFileName.TXT") == 0);
+    assert(fat_delete(g_fs, "/averyveryverylongfilename.dat") == 0);
+
+    /* recreate under same names must work (no ghost collisions) */
+    assert(fat_create(g_fs, "/LongFileName.TXT", 0) == 0);
+    const char* msg = "second life";
+    assert(fat_write(g_fs, "/LongFileName.TXT", msg, strlen(msg)) == 0);
+
+    vfs_node_info_t list[16];
+    int n = fat_list(g_fs, "/", list, 16);
+    int count_lfn = 0;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(list[i].name, "LongFileName.TXT") == 0) count_lfn++;
+        assert(strncmp(list[i].name, "~", 1) != 0); /* aliases never leak as entries */
+    }
+    assert(count_lfn == 1);
+    assert(fat_delete(g_fs, "/LongFileName.TXT") == 0);
+    printf("  [12/13] LFN delete wipes slots; recreate has no ghosts... PASS\n");
+}
+
+static void test_lfn_persistence(void) {
+    const char* msg = "persist long";
+    assert(fat_create(g_fs, "/Persistent Long Name.BIN", 0) == 0);
+    assert(fat_write(g_fs, "/Persistent Long Name.BIN", msg, strlen(msg)) == 0);
+
+    assert(fat_umount(g_fs) == 0);
+    void* fs_data = 0;
+    assert(fat_mount(0, 0, &fs_data) == 0);
+    g_fs = (fat_fs_t*)fs_data;
+
+    char out[64];
+    memset(out, 0, sizeof(out));
+    assert(fat_read(g_fs, "/persistent long name.bin", out, (u32)strlen(msg)) == (int)strlen(msg));
+    assert(strcmp(out, msg) == 0);
+    printf("  [13/13] LFN survives remount... PASS\n");
 }
 
 static void test_exhaustion_guard(void) {

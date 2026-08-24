@@ -6,7 +6,6 @@
 #include "nvme.h"
 #include "virtio_blk.h"
 #include "usb.h"
-#include "usb_msc.h"
 #include "page_cache.h"
 #include "serial.h"
 #include "fde.h"
@@ -452,7 +451,6 @@ static int disk_raw_read(disk_dev_t* d, u32 lba, u8* out512) {
     if (d->backend == DISK_BACKEND_NVME) return nvme_read_sector(lba, out512);
     if (d->backend == DISK_BACKEND_VIRTIO) return virtio_blk_read_sector(lba, out512);
     if (d->backend == DISK_BACKEND_USB) {
-        if (usb_msc_is_ready()) return usb_msc_read_sector(lba, out512);
         return usb_mass_storage_read_sector(lba, out512);
     }
     if (d->backend == DISK_BACKEND_ATA) return ata_read_sector(d, lba, out512);
@@ -469,7 +467,6 @@ static int disk_raw_write(disk_dev_t* d, u32 lba, const u8* in512) {
     if (d->backend == DISK_BACKEND_NVME) return nvme_write_sector(lba, in512);
     if (d->backend == DISK_BACKEND_VIRTIO) return virtio_blk_write_sector(lba, in512);
     if (d->backend == DISK_BACKEND_USB) {
-        if (usb_msc_is_ready()) return usb_msc_write_sector(lba, in512);
         return usb_mass_storage_write_sector(lba, in512);
     }
     if (d->backend == DISK_BACKEND_ATA) return ata_write_sector(d, lba, in512);
@@ -564,13 +561,13 @@ void disk_init(void) {
 
     /* Keep removable storage as a separate disk so a USB stick cannot
        unexpectedly replace the boot device selected above. */
-    if ((usb_msc_is_ready() || usb_mass_storage_ready()) && g_dev_count < DISK_MAX_DEVICES) {
+    if (usb_mass_storage_ready() && g_dev_count < DISK_MAX_DEVICES) {
         disk_dev_t* usb = &g_dev[g_dev_count];
         memset(usb, 0, sizeof(*usb));
         usb->active = 1u;
         usb->id = g_dev_count;
         usb->backend = DISK_BACKEND_USB;
-        usb->sectors = usb_msc_is_ready() ? usb_msc_sector_count() : usb_mass_storage_sector_count();
+        usb->sectors = usb_mass_storage_sector_count();
         usb->info.present = 1u;
         usb->info.writable = 1u;
         usb->info.id = usb->id;

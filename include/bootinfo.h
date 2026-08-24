@@ -61,4 +61,14 @@ int bootinfo_validate(void);
 /* Temporary debug dump of the raw limine response pointers over serial. */
 void bootinfo_debug_dump(void);
 
+/* Physical usable-memory region exported by the boot loader parse. */
+typedef struct {
+    u64 base;
+    u64 len;
+} boot_mem_region_t;
+
+#define FRAME_SIZE_4K 4096ull
+extern boot_mem_region_t g_boot_regions[16];
+extern u32 g_boot_region_count;
+
 #endif /* BOOTINFO_H */

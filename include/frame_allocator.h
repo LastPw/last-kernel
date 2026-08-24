@@ -3,8 +3,12 @@
 
 #include "types.h"
 
-void frame_allocator_init(u32 ram_bytes);
+void frame_allocator_init(u64 ram_bytes);
 void* frame_alloc(void);
+/* Device-DMA-safe: only returns frames from regions below 4 GiB. */
+void* frame_alloc_dma32(void);
+void* frame_alloc_dma32_order(u8 order);
+u64  frame_total_bytes(void);
 void frame_free(void* frame);
 void* frame_alloc_order(u8 order);
 void frame_free_order(void* frame, u8 order);

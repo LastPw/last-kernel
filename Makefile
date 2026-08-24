@@ -111,7 +111,6 @@ C_OBJS := \
 	$(BUILD_DIR)/httpd.o \
 	$(BUILD_DIR)/xhci.o \
 	$(BUILD_DIR)/usb_ohci.o \
-	$(BUILD_DIR)/usb_msc.o \
 	$(BUILD_DIR)/keyboard.o \
 	$(BUILD_DIR)/mouse.o \
 	$(BUILD_DIR)/touchpad.o \
@@ -502,9 +501,6 @@ $(BUILD_DIR)/xhci.o: drivers/usb/xhci.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/usb_ohci.o: drivers/usb/usb_ohci.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/usb_msc.o: drivers/usb/usb_msc.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/keyboard.o: drivers/char/keyboard.c | $(BUILD_DIR)

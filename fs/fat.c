@@ -219,71 +219,374 @@ typedef struct {
     u32 cluster;
 } fat_dirloc_t;
 
-/* Locate an entry by its exact 8.3 image. Returns the slot index and fills
- * out_de/out_loc; *free_slot reports the first deletable/empty slot seen. */
-static int fat_dir_scan(fat_fs_t* fs, const fat_dirloc_t* loc,
-                        const u8 name83[MSDOS_NAME],
-                        struct msdos_dir_entry* out_de,
-                        u32* out_index, u32* out_cluster,
-                        u32* free_slot_index, u32* free_slot_cluster) {
-    u8 buf[8192];
-    *free_slot_index = 0xFFFFFFFFu;
-    *free_slot_cluster = 0u;
+/* One addressable directory slot */
+typedef struct {
+    u32 container; /* sector offset (fixed root) or cluster number */
+    u32 index;     /* entry index within container */
+} fat_slotpos_t;
 
-    if (loc->is_fixed_root) {
-        u32 root_sectors = ((fs->dir_entries * sizeof(struct msdos_dir_entry))
-                            + fs->bytes_per_sec - 1) / fs->bytes_per_sec;
-        u32 entries_per_sector = fs->bytes_per_sec / (u32)sizeof(struct msdos_dir_entry);
-        for (u32 s = 0; s < root_sectors; s++) {
-            if (fat_read_sectors(fs, fs->dir_start + s, buf, 1) != 0) return -1;
-            struct msdos_dir_entry* de = (struct msdos_dir_entry*)buf;
-            for (u32 i = 0; i < entries_per_sector; i++) {
-                u32 abs_idx = s * entries_per_sector + i;
-                if (abs_idx >= fs->dir_entries) return 0;
-                if (de[i].name[0] == 0x00 || de[i].name[0] == 0xE5) {
-                    if (*free_slot_index == 0xFFFFFFFFu) {
-                        *free_slot_index = abs_idx;
-                        *free_slot_cluster = s; /* sector index within root */
-                    }
-                    if (de[i].name[0] == 0x00) return 0;
-                    continue;
-                }
-                if (memcmp(de[i].name, name83, MSDOS_NAME) == 0) {
-                    if (out_de) *out_de = de[i];
-                    *out_index = abs_idx;
-                    *out_cluster = s;
-                    return 1;
-                }
-            }
-        }
+#define FAT_LFN_MAX_SLOTS 20u
+#define FAT_LFN_NAME_MAX  256u
+
+/* LFN checksum over the 11-byte short name (spec: rotate-right add) */
+static u8 fat_lfn_checksum(const u8 name83[MSDOS_NAME]) {
+    u8 sum = 0u;
+    for (u32 i = 0; i < MSDOS_NAME; i++) {
+        sum = (u8)(((sum >> 1) | (u8)(sum << 7)) + name83[i]);
+    }
+    return sum;
+}
+
+/* Assemble a UTF-16LE LFN entry payload into the char buffer.
+ * Returns chars appended. Rejects non-ASCII (this driver is ASCII-only). */
+static u32 fat_lfn_unpack(const struct msdos_dir_entry* de, u16* out, u32 cap) {
+    static const u8 offsets[13] = { 0,2,4,6,8, 14,16,18,20,22,24, 28,30 };
+    u32 n = 0;
+    for (u32 i = 0; i < 13; i++) {
+        u8 lo = ((const u8*)de)[offsets[i]];
+        u8 hi = ((const u8*)de)[offsets[i] + 1];
+        if (lo == 0x00 && hi == 0x00) break;           /* terminator */
+        if (lo == 0xFF && hi == 0xFF) break;           /* padding   */
+        if (hi != 0x00) return 0xFFFFFFFFu;            /* non-ASCII */
+        if (n < cap) out[n++] = lo;
+    }
+    return n;
+}
+
+/* Any lowercase letter present? (case-preservation => LFN territory) */
+static int fat_name_has_lower(const char* name) {
+    for (const char* p = name; *p; p++) {
+        if (*p >= 'a' && *p <= 'z') return 1;
+    }
+    return 0;
+}
+
+/* Does this request need a long-name slot set? */
+static int fat_needs_lfn(const char* name, const u8 name83[MSDOS_NAME]) {
+    u32 blen = 0, elen = 0;
+    const char* dot = 0;
+    for (const char* p = name; *p; p++) {
+        if (*p == '.') { dot = p; break; }
+        blen++;
+    }
+    if (dot) for (const char* p = dot + 1; *p; p++) elen++;
+    if (blen + (elen ? elen + 1u : 0u) != (u32)strlen(name)) return 1; /* multiple dots etc. */
+
+    /* lowercase anywhere -> needs LFN for case preservation */
+    if (fat_name_has_lower(name)) return 1;
+    /* must match what build_83 would produce */
+    u8 probe[MSDOS_NAME];
+    if (fat_build_83(name, probe) != 0) return 1;
+    return memcmp(probe, name83, MSDOS_NAME) != 0;
+}
+
+/* Generate the short-name alias with numeric tail (~n) when needed.
+ * unique_fn probes whether an alias is already taken. */
+static int fat_make_alias(const char* name, u8 out[MSDOS_NAME],
+                          int (*taken)(const void* ctx, const u8 alias[MSDOS_NAME]),
+                          const void* ctx) {
+    u8 probe[MSDOS_NAME];
+    if (fat_build_83(name, probe) == 0 && !fat_name_has_lower(name)) {
+        memcpy(out, probe, MSDOS_NAME);
         return 0;
     }
 
-    u32 cluster = loc->cluster;
-    u32 guard = fs->max_cluster + 2u;
-    while (cluster >= FAT_START_ENT && !fat_is_eoc(fs, cluster) && guard-- > 0u) {
-        if (fat_read_cluster(fs, cluster, buf) != 0) return -1;
-        u32 entries = fs->cluster_size / (u32)sizeof(struct msdos_dir_entry);
+    char base[6];
+    u32 blen = 0;
+    for (const char* p = name; *p && *p != '.'; p++) {
+        char c = *p;
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        if (blen < 5) base[blen++] = c;
+    }
+    char ext[4];
+    u32 elen = 0;
+    const char* dot = 0;
+    for (const char* p = name; *p; p++) {
+        if (*p == '.') dot = p;
+    }
+    if (dot && dot[1]) {
+        for (const char* p = dot + 1; *p && elen < 3; p++) {
+            char c = *p;
+            if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+            ext[elen++] = c;
+        }
+    }
+
+    for (u32 n = 1; n <= 9u; n++) {
+        memset(out, ' ', MSDOS_NAME);
+        char tail[3] = { '~', (char)('0' + n), 0 };
+        u32 tlen = 2;
+        u32 pos = 0;
+        u32 keep = blen > (5u - tlen) ? (5u - tlen) : blen;
+        for (u32 i = 0; i < keep; i++) out[pos++] = (u8)base[i];
+        for (u32 i = 0; i < tlen; i++) out[pos++] = (u8)tail[i];
+        for (u32 i = 0; i < elen; i++) out[8u + i] = (u8)ext[i];
+        if (!taken || !taken(ctx, out)) return 0;
+    }
+    return -1;
+}
+
+/* Locate an entry by its exact 8.3 image. Returns the slot index and fills
+ * out_de/out_loc; *free_slot reports the first deletable/empty slot seen. */
+static void fat_name_to_str(const u8* fat_name, u32 len, char* out, u32 out_sz);
+static u32 fat_dir_extend(fat_fs_t* fs, const fat_dirloc_t* loc);
+
+/* Read one directory container (fixed-root sector or cluster) */
+static int fat_dir_read_container(fat_fs_t* fs, const fat_dirloc_t* loc,
+                                  u32 container, u8* buf) {
+    if (loc->is_fixed_root) {
+        return fat_read_sectors(fs, fs->dir_start + container, buf, 1);
+    }
+    return fat_read_cluster(fs, container, buf);
+}
+
+static u32 fat_dir_entries_per(fat_fs_t* fs, const fat_dirloc_t* loc) {
+    return loc->is_fixed_root
+        ? (fs->bytes_per_sec / (u32)sizeof(struct msdos_dir_entry))
+        : (fs->cluster_size / (u32)sizeof(struct msdos_dir_entry));
+}
+
+/* Case-insensitive ASCII compare */
+static int fat_ieq(const char* a, const char* b) {
+    while (*a && *b) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+        if (ca != cb) return 0;
+        a++; b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+/* Scan a directory for an entry.
+ *
+ * Match criteria: exact 8.3 image (name83) OR case-insensitive long-name
+ * match (match_name). Either may be NULL. When a match has VFAT long-name
+ * slots, their positions are returned via lfn_slots/lfn_count so callers
+ * can wipe them on delete. Free-slot tracking reports the first deletable
+ * or empty slot for single-entry insertion.
+ *
+ * Returns 1 on match, 0 when absent, -1 on I/O error. */
+static int fat_dir_scan(fat_fs_t* fs, const fat_dirloc_t* loc,
+                        const u8 name83[MSDOS_NAME],
+                        const char* match_name,
+                        struct msdos_dir_entry* out_de,
+                        u32* out_index, u32* out_container,
+                        u32* free_slot_index, u32* free_slot_container,
+                        fat_slotpos_t* lfn_slots, u32* lfn_count,
+                        char* out_longname, u32 longname_sz) {
+    u8 buf[8192];
+    u16 lbuf[FAT_LFN_NAME_MAX];
+    u32 llen = 0;
+    u8 pend_cksum = 0;
+    u8 pend_expect = 0;
+    u8 pend_active = 0;
+    fat_slotpos_t pend_pos[FAT_LFN_MAX_SLOTS];
+    u32 pend_n = 0;
+
+    *free_slot_index = 0xFFFFFFFFu;
+    *free_slot_container = 0u;
+    if (lfn_count) *lfn_count = 0;
+
+    u32 container;
+    u32 guard;
+    u32 fixed_containers = 0u;
+    if (loc->is_fixed_root) {
+        fixed_containers = ((fs->dir_entries * sizeof(struct msdos_dir_entry))
+                            + fs->bytes_per_sec - 1u) / fs->bytes_per_sec;
+        container = 0u;
+        guard = fixed_containers + 1u;
+    } else {
+        container = loc->cluster;
+        guard = fs->max_cluster + 4u;
+    }
+
+    while (guard-- > 0u) {
+        if (!loc->is_fixed_root) {
+            if (container < FAT_START_ENT || fat_is_eoc(fs, container)) break;
+        }
+        if (loc->is_fixed_root && container >= fixed_containers) break;
+        if (fat_dir_read_container(fs, loc, container, buf) != 0) return -1;
+
+        u32 entries = fat_dir_entries_per(fs, loc);
         struct msdos_dir_entry* de = (struct msdos_dir_entry*)buf;
+
         for (u32 i = 0; i < entries; i++) {
-            if (de[i].name[0] == 0x00 || de[i].name[0] == 0xE5) {
-                if (*free_slot_index == 0xFFFFFFFFu) {
-                    *free_slot_index = i;
-                    *free_slot_cluster = cluster;
+            u8 attr = de[i].attr;
+
+            /* VFAT long-name entry */
+            if ((attr & ATTR_VOLUME) == ATTR_VOLUME &&
+                (attr & (ATTR_RO | ATTR_SYS | ATTR_HIDDEN)) == (ATTR_RO | ATTR_SYS | ATTR_HIDDEN) &&
+                de[i].name[0] != 0xE5 && de[i].name[0] != 0x00) {
+                u8 id = de[i].name[0];
+                u8 seq = (u8)(id & 0x3Fu);
+                if (id & 0x40u) {
+                    /* first physical entry of the chain */
+                    pend_active = 1u;
+                    pend_n = 0u;
+                    llen = 0u;
+                    memset(lbuf, 0xFF, sizeof(lbuf));
+                    pend_cksum = ((const u8*)&de[i])[13]; /* LFN checksum @ byte 13 */
+                    pend_expect = seq;
                 }
-                if (de[i].name[0] == 0x00) return 0;
+                if (!pend_active || seq != pend_expect || pend_n >= FAT_LFN_MAX_SLOTS) {
+                    pend_active = 0u;
+                } else {
+                    pend_pos[pend_n].container = container;
+                    pend_pos[pend_n].index = i;
+                    pend_n++;
+                    u32 got = fat_lfn_unpack(&de[i], lbuf + llen, FAT_LFN_NAME_MAX - llen);
+                    if (got == 0xFFFFFFFFu) pend_active = 0u;
+                    else llen += got;
+                    pend_expect = (u8)(seq - 1u);
+                }
                 continue;
             }
-            if (memcmp(de[i].name, name83, MSDOS_NAME) == 0) {
+
+            /* Regular / deleted / terminator entries end any LFN chain */
+            if (de[i].name[0] == 0x00 || de[i].name[0] == 0xE5) {
+                if (de[i].name[0] == 0x00 || de[i].name[0] == 0xE5) {
+                    if (*free_slot_index == 0xFFFFFFFFu) {
+                        *free_slot_index = i;
+                        *free_slot_container = container;
+                    }
+                }
+                if (de[i].name[0] == 0x00) {
+                    if (!loc->is_fixed_root) break; /* terminator ends a chain dir */
+                    /* fixed root: keep scanning later sectors? entries are
+                       written sequentially; a 0x00 means nothing further */
+                    goto done;
+                }
+                pend_active = 0u;
+                continue;
+            }
+
+            if (attr == ATTR_VOLUME) continue; /* plain volume label */
+
+            /* Short entry reached: resolve its display/match names */
+            char shortname[16];
+            fat_name_to_str(de[i].name, MSDOS_NAME, shortname, sizeof(shortname));
+
+            const char* longp = 0;
+            char assembled[FAT_LFN_NAME_MAX];
+            if (pend_active && llen > 0u && lfn_slots) {
+                if (pend_cksum == fat_lfn_checksum(de[i].name)) {
+                    u32 n = llen < FAT_LFN_NAME_MAX ? llen : FAT_LFN_NAME_MAX - 1u;
+                    for (u32 k = 0; k < n; k++) assembled[k] = (char)lbuf[k];
+                    assembled[n] = '\0';
+                    longp = assembled;
+                }
+            }
+
+            int hit = 0;
+            if (name83 && memcmp(de[i].name, name83, MSDOS_NAME) == 0) hit = 1;
+            if (!hit && match_name) {
+                if (longp && fat_ieq(longp, match_name)) hit = 1;
+                else if (fat_ieq(shortname, match_name)) hit = 1;
+            }
+
+            if (hit) {
                 if (out_de) *out_de = de[i];
-                *out_index = i;
-                *out_cluster = cluster;
+                if (out_index) *out_index = i;
+                if (out_container) *out_container = container;
+                if (longp && out_longname && longname_sz > 0u) {
+                    u32 n = strlen(longp);
+                    if (n >= longname_sz) n = longname_sz - 1u;
+                    memcpy(out_longname, longp, n);
+                    out_longname[n] = '\0';
+                }
+                if (lfn_count && lfn_slots && pend_active) {
+                    u32 n = pend_n < FAT_LFN_MAX_SLOTS ? pend_n : FAT_LFN_MAX_SLOTS;
+                    for (u32 k = 0; k < n; k++) lfn_slots[k] = pend_pos[k];
+                    *lfn_count = n;
+                }
                 return 1;
             }
+            pend_active = 0u;
         }
-        cluster = fat_get_next(fs, cluster);
+
+        if (loc->is_fixed_root) break;
+        container = fat_get_next(fs, container);
     }
+done:
     return 0;
+}
+
+/* Collect `count` consecutive-free directory slot positions, extending a
+ * chain directory once when it runs out of space. Fixed root cannot grow. */
+static int fat_dir_alloc_run(fat_fs_t* fs, const fat_dirloc_t* loc, u32 count,
+                             fat_slotpos_t* out) {
+    u8 buf[8192];
+    u32 found = 0u;
+    u32 extended = 0u;
+    u32 container;
+    u32 fixed_containers = 0u;
+    if (loc->is_fixed_root) {
+        fixed_containers = ((fs->dir_entries * sizeof(struct msdos_dir_entry))
+                            + fs->bytes_per_sec - 1u) / fs->bytes_per_sec;
+        container = 0u;
+    } else {
+        container = loc->cluster;
+    }
+
+    while (found < count) {
+        if (!loc->is_fixed_root) {
+            if (container < FAT_START_ENT || fat_is_eoc(fs, container)) {
+                if (extended) return -1;
+                extended = 1u;
+                u32 fresh = fat_dir_extend(fs, loc);
+                if (fresh == 0) return -1;
+                container = fresh; /* fresh cluster is fully zeroed -> all free */
+            }
+        }
+        if (loc->is_fixed_root && container >= fixed_containers) return -1;
+        if (fat_dir_read_container(fs, loc, container, buf) != 0) return -1;
+        u32 entries = fat_dir_entries_per(fs, loc);
+        struct msdos_dir_entry* de = (struct msdos_dir_entry*)buf;
+
+        for (u32 i = 0; i < entries && found < count; i++) {
+            if (de[i].name[0] == 0x00) {
+                /* consume the terminator only as the LAST taken slot */
+                if (found + 1u < count) {
+                    if (loc->is_fixed_root) return -1; /* would erase terminator */
+                }
+            }
+            if (de[i].name[0] == 0x00 || de[i].name[0] == 0xE5) {
+                out[found].container = container;
+                out[found].index = i;
+                found++;
+            } else {
+                found = 0u; /* restart run */
+            }
+        }
+        if (loc->is_fixed_root) break;
+        if (found < count && !extended) container = fat_get_next(fs, container);
+        else if (found < count && extended) break;
+    }
+    return found == count ? 0 : -1;
+}
+
+/* Fill one VFAT long-name slot. seq counts DOWN from N to 1; the slot
+ * holding seq==N carries the 0x40 "last physical-first logical" flag. */
+static void fat_fill_lfn_entry(struct msdos_dir_entry* de, u8 seq, u8 is_first,
+                               u8 cksum, const u16* chars, u32 total_chars) {
+    static const u8 offs[13] = { 0,2,4,6,8, 14,16,18,20,22,24, 28,30 };
+    memset(((u8*)de) + 0, 0xFF, 32);
+    u32 base = (u32)(seq - 1u) * 13u;
+    for (u32 k = 0; k < 13; k++) {
+        u32 ci = base + k;
+        u16 ch = 0xFFFFu;
+        if (ci < total_chars) ch = (u16)(u8)chars[ci];
+        else if (ci == total_chars) ch = 0x0000u;
+        ((u8*)de)[offs[k]] = (u8)(ch & 0xFFu);
+        ((u8*)de)[offs[k] + 1] = (u8)(ch >> 8);
+    }
+    de->name[0] = (u8)(seq | (is_first ? 0x40u : 0x00u));
+    de->name[1] = 0x00; /* reserved UTF16 part overwritten above anyway */
+    de->attr = (u8)(ATTR_RO | ATTR_HIDDEN | ATTR_SYS | ATTR_VOLUME); /* 0x0F */
+    de->nt_res = 0x00;
+    de->crt_time_tenth = cksum;   /* LFN reuses this byte as checksum */
+    de->start = 0x0000;
 }
 
 /* Write one directory entry back by absolute slot identity */
@@ -415,7 +718,8 @@ static u32 fat_dir_find_entry(fat_fs_t* fs, u32 dir_cluster, const char* name,
 
     struct msdos_dir_entry de;
     u32 si = 0, sc = 0, fi = 0, fc = 0;
-    if (fat_dir_scan(fs, &loc, name83, &de, &si, &sc, &fi, &fc) != 1) return 0;
+    if (fat_dir_scan(fs, &loc, name83, name, &de, &si, &sc, &fi, &fc,
+                     0, 0, 0, 0) != 1) return 0;
     if (out_de) *out_de = de;
     return (u32)de.start | ((u32)de.start_hi << 16);
 }
@@ -494,38 +798,88 @@ static void fat_de_to_info(fat_fs_t* fs, const struct msdos_dir_entry* de,
 }
 
 /* List directory */
-static int fat_dir_list(fat_fs_t* fs, u32 dir_cluster, vfs_node_info_t* out, u32 max_out) {
+/* Unified listing with VFAT long-name support */
+static int fat_dir_list_ex(fat_fs_t* fs, const fat_dirloc_t* loc,
+                           vfs_node_info_t* out, u32 max_out) {
     u8 buf[8192];
-    u32 cluster = dir_cluster;
+    u16 lbuf[FAT_LFN_NAME_MAX];
+    u32 llen = 0;
+    u8 pend_cksum = 0, pend_expect = 0, pend_active = 0;
+    char pending_name[FAT_LFN_NAME_MAX];
     u32 count = 0;
 
-    while (cluster != 0 && !fat_is_eoc(fs, cluster) && count < max_out) {
-        if (fat_read_cluster(fs, cluster, buf) != 0) break;
+    u32 container = loc->cluster;
+    u32 guard = loc->is_fixed_root ? 1u : (fs->max_cluster + 4u);
 
-        u32 entries_per_cluster = fs->cluster_size / sizeof(struct msdos_dir_entry);
+    while (guard-- > 0u && count < max_out) {
+        if (!loc->is_fixed_root) {
+            if (container < FAT_START_ENT || fat_is_eoc(fs, container)) break;
+        }
+        if (fat_dir_read_container(fs, loc, container, buf) != 0) break;
+
+        u32 entries = fat_dir_entries_per(fs, loc);
         struct msdos_dir_entry* de = (struct msdos_dir_entry*)buf;
 
-        for (u32 i = 0; i < entries_per_cluster && count < max_out; i++) {
-            if (de[i].name[0] == 0) goto done;
-            if (de[i].name[0] == 0xE5) continue;
-            if (de[i].attr == ATTR_VOLUME) continue;
-            if (de[i].attr & ATTR_VOLUME) continue; /* Skip VFAT */
+        for (u32 i = 0; i < entries; i++) {
+            u8 attr = de[i].attr;
+
+            if ((attr & ATTR_VOLUME) == ATTR_VOLUME &&
+                (attr & (ATTR_RO | ATTR_SYS | ATTR_HIDDEN)) == (ATTR_RO | ATTR_SYS | ATTR_HIDDEN) &&
+                de[i].name[0] != 0xE5 && de[i].name[0] != 0x00) {
+                u8 id = de[i].name[0];
+                u8 seq = (u8)(id & 0x3Fu);
+                if (id & 0x40u) {
+                    pend_active = 1u;
+                    llen = 0u;
+                    memset(lbuf, 0xFF, sizeof(lbuf));
+                    pend_cksum = ((const u8*)&de[i])[13];
+                    pend_expect = seq;
+                }
+                if (!pend_active || seq != pend_expect) {
+                    pend_active = 0u;
+                } else {
+                    u32 got = fat_lfn_unpack(&de[i], lbuf + llen, FAT_LFN_NAME_MAX - llen);
+                    if (got == 0xFFFFFFFFu) pend_active = 0u;
+                    else llen += got;
+                    pend_expect = (u8)(seq - 1u);
+                }
+                continue;
+            }
+
+            if (de[i].name[0] == 0x00) goto done;
+            if (de[i].name[0] == 0xE5) { pend_active = 0u; continue; }
+            if (attr == ATTR_VOLUME) continue;
 
             out[count].used = 1;
-            u32 start = (u32)de[i].start | ((u32)de[i].start_hi << 16);
-            out[count].id = start;
+            u32 startc = (u32)de[i].start | ((u32)de[i].start_hi << 16);
+            out[count].id = startc;
             out[count].size = de[i].size;
             out[count].type = (de[i].attr & ATTR_DIR) ? VFS_NODE_DIR : VFS_NODE_FILE;
             out[count].mode = (de[i].attr & ATTR_RO) ? 0555 : 0755;
 
             fat_name_to_str(de[i].name, MSDOS_NAME, out[count].name, VFS_MAX_NAME);
-            count++;
+
+            if (pend_active && llen > 0u &&
+                pend_cksum == fat_lfn_checksum(de[i].name)) {
+                u32 n = llen < FAT_LFN_NAME_MAX ? llen : FAT_LFN_NAME_MAX - 1u;
+                for (u32 k = 0; k < n; k++) pending_name[k] = (char)lbuf[k];
+                pending_name[n] = '\0';
+                if (strlen(pending_name) > 0u && strlen(pending_name) < VFS_MAX_NAME) {
+                    memset(out[count].name, 0, VFS_MAX_NAME);
+                    memcpy(out[count].name, pending_name, strlen(pending_name));
+                }
+            }
+            pend_active = 0u;
+            if (++count >= max_out) break;
         }
-        cluster = fat_get_next(fs, cluster);
+
+        if (loc->is_fixed_root) break;
+        container = fat_get_next(fs, container);
     }
 done:
     return (int)count;
 }
+
 
 /* Driver implementations */
 
@@ -627,7 +981,10 @@ int fat_list(void* fs_data, const char* path, vfs_node_info_t* out, u32 max_out)
     if (str_cmp(path, "/") == 0) {
         /* Root directory - for FAT12/16, root is special */
         if (fs->fat_bits == 32) {
-            return fat_dir_list(fs, fs->root_cluster, out, max_out);
+            fat_dirloc_t rloc;
+            rloc.is_fixed_root = 0u;
+            rloc.cluster = fs->root_cluster;
+            return fat_dir_list_ex(fs, &rloc, out, max_out);
         } else {
             /* FAT12/16 root directory is at a fixed location */
             u8 buf[8192];
@@ -664,7 +1021,12 @@ int fat_list(void* fs_data, const char* path, vfs_node_info_t* out, u32 max_out)
 
     /* Check if it's a directory */
     if (!(de.attr & ATTR_DIR)) return -1;
-    return fat_dir_list(fs, cluster, out, max_out);
+    {
+        fat_dirloc_t dloc;
+        dloc.is_fixed_root = 0u;
+        dloc.cluster = cluster;
+        return fat_dir_list_ex(fs, &dloc, out, max_out);
+    }
 }
 
 int fat_read(void* fs_data, const char* path, char* out, u32 out_len) {
@@ -694,8 +1056,8 @@ int fat_write(void* fs_data, const char* path, const char* data, u32 len) {
 
     struct msdos_dir_entry de;
     u32 slot_index = 0, slot_container = 0, free_index = 0, free_container = 0;
-    int found = fat_dir_scan(fs, &loc, name83, &de, &slot_index, &slot_container,
-                             &free_index, &free_container);
+    int found = fat_dir_scan(fs, &loc, name83, leaf, &de, &slot_index, &slot_container,
+                             &free_index, &free_container, 0, 0, 0, 0);
     if (found < 0) return -1;
     if (found == 0) {
         if (free_index == 0xFFFFFFFFu) return -1; /* directory full */
@@ -757,6 +1119,20 @@ int fat_write(void* fs_data, const char* path, const char* data, u32 len) {
     return fat_dir_write_slot(fs, &loc, slot_index, slot_container, &de);
 }
 
+/* Context for alias-uniqueness probing during create */
+typedef struct {
+    fat_fs_t* fs;
+    const fat_dirloc_t* loc;
+} fat_alias_ctx_t;
+
+static int fat_alias_taken(const void* ctxp, const u8 alias[MSDOS_NAME]) {
+    const fat_alias_ctx_t* ctx = (const fat_alias_ctx_t*)ctxp;
+    struct msdos_dir_entry tmp;
+    u32 si = 0, sc = 0, fi = 0, fc = 0;
+    return fat_dir_scan(ctx->fs, ctx->loc, alias, 0,
+                        &tmp, &si, &sc, &fi, &fc, 0, 0, 0, 0) == 1;
+}
+
 int fat_create(void* fs_data, const char* path, u8 is_dir) {
     if (!fs_data || !path) return -1;
     fat_fs_t* fs = (fat_fs_t*)fs_data;
@@ -765,20 +1141,28 @@ int fat_create(void* fs_data, const char* path, u8 is_dir) {
     fat_dirloc_t loc;
     if (fat_resolve_parent(fs, path, leaf, sizeof(leaf), &loc) != 0) return -1;
 
-    u8 name83[MSDOS_NAME];
-    if (fat_build_83(leaf, name83) != 0) return -1;
-
-    struct msdos_dir_entry tmp;
-    u32 si = 0, sc = 0, fi = 0, fc = 0;
-    int found = fat_dir_scan(fs, &loc, name83, &tmp, &si, &sc, &fi, &fc);
-    if (found != 0) return -1; /* already exists (or I/O error) */
-    if (fi == 0xFFFFFFFFu) {
-        if (loc.is_fixed_root) return -1;
-        if (fat_dir_extend(fs, &loc) == 0) return -1;
-        found = fat_dir_scan(fs, &loc, name83, &tmp, &si, &sc, &fi, &fc);
-        if (found != 0 || fi == 0xFFFFFFFFu) return -1;
+    /* Long-name validation: ASCII printable, length caps */
+    u32 nlen = (u32)str_len(leaf);
+    if (nlen == 0u || nlen > FAT_LFN_NAME_MAX - 1u) return -1;
+    for (u32 i = 0; i < nlen; i++) {
+        unsigned char c = (unsigned char)leaf[i];
+        if (c < 0x20u || c > 0x7Eu) return -1;
     }
 
+    u8 name83[MSDOS_NAME];
+
+    /* duplicate check by long name and by final alias */
+    fat_alias_ctx_t actx = { fs, &loc };
+    if (fat_make_alias(leaf, name83, fat_alias_taken, &actx) != 0) return -1;
+    if (fat_alias_taken(&actx, name83)) return -1;
+    struct msdos_dir_entry tmp;
+    u32 si = 0, sc = 0, fi = 0, fc = 0;
+    if (fat_dir_scan(fs, &loc, 0, leaf, &tmp, &si, &sc, &fi, &fc,
+                     0, 0, 0, 0) == 1) return -1;
+
+    int needs_lfn = fat_needs_lfn(leaf, name83);
+
+    /* directory payload cluster first so a failure aborts cleanly */
     u32 first_cluster = 0u;
     u8 attr = ATTR_ARCH;
     if (is_dir) {
@@ -798,8 +1182,34 @@ int fat_create(void* fs_data, const char* path, u8 is_dir) {
         }
     }
 
+    /* slot allocation: contiguous run of N LFN entries + 1 short entry */
+    u16 chars[FAT_LFN_NAME_MAX];
+    u32 lfn_n = 0u;
+    if (needs_lfn) {
+        for (u32 k = 0; k < nlen; k++) chars[k] = (u16)(unsigned char)leaf[k];
+        lfn_n = (nlen + 12u) / 13u;
+    }
+    u32 run = lfn_n + 1u;
+
+    fat_slotpos_t slots[FAT_LFN_MAX_SLOTS + 1u];
+    if (fat_dir_alloc_run(fs, &loc, run, slots) != 0) {
+        if (first_cluster) (void)fat_free_chain(fs, first_cluster);
+        return -1;
+    }
+
+    /* write VFAT entries: physical order seq=N ... seq=1 */
+    u8 cksum = fat_lfn_checksum(name83);
+    for (u32 k = 0; k < lfn_n; k++) {
+        u8 seq = (u8)(lfn_n - k);           /* slot k holds seq N-k */
+        fat_fill_lfn_entry(&tmp, seq, (u8)(k == 0u ? 1u : 0u), cksum, chars, nlen);
+        if (fat_dir_write_slot(fs, &loc, slots[k].index, slots[k].container, &tmp) != 0) {
+            if (first_cluster) (void)fat_free_chain(fs, first_cluster);
+            return -1;
+        }
+    }
+
     fat_init_dirent(&tmp, name83, attr, first_cluster, 0u);
-    if (fat_dir_write_slot(fs, &loc, fi, fc, &tmp) != 0) {
+    if (fat_dir_write_slot(fs, &loc, slots[lfn_n].index, slots[lfn_n].container, &tmp) != 0) {
         if (first_cluster) (void)fat_free_chain(fs, first_cluster);
         return -1;
     }
@@ -819,7 +1229,10 @@ int fat_delete(void* fs_data, const char* path) {
 
     struct msdos_dir_entry de;
     u32 si = 0, sc = 0, fi = 0, fc = 0;
-    if (fat_dir_scan(fs, &loc, name83, &de, &si, &sc, &fi, &fc) != 1) return -1;
+    fat_slotpos_t lfn_slots[FAT_LFN_MAX_SLOTS];
+    u32 lfn_count = 0u;
+    if (fat_dir_scan(fs, &loc, name83, leaf, &de, &si, &sc, &fi, &fc,
+                     lfn_slots, &lfn_count, 0, 0) != 1) return -1;
     if (de.attr & ATTR_VOLUME) return -1;
 
     u32 start = (u32)de.start | ((u32)de.start_hi << 16);
@@ -850,7 +1263,19 @@ int fat_delete(void* fs_data, const char* path) {
     }
 
     de.name[0] = 0xE5;
-    return fat_dir_write_slot(fs, &loc, si, sc, &de);
+    int rc = fat_dir_write_slot(fs, &loc, si, sc, &de);
+
+    /* wipe the VFAT long-name slots so no ghost names remain */
+    if (rc == 0 && lfn_count > 0u) {
+        for (u32 k = 0; k < lfn_count && rc == 0; k++) {
+            struct msdos_dir_entry ghost;
+            memset(&ghost, 0xE5, sizeof(ghost));
+            ghost.name[0] = 0xE5;
+            rc = fat_dir_write_slot(fs, &loc, lfn_slots[k].index,
+                                    lfn_slots[k].container, &ghost);
+        }
+    }
+    return rc;
 }
 
 int fat_info(void* fs_data, const char* path, vfs_node_info_t* out) {

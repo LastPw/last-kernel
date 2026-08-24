@@ -95,6 +95,12 @@ void bootinfo_debug_dump(void) {
 /* ── Frozen boot contract consumed by the rest of the kernel ─────────────── */
 
 u64 g_hhdm_offset = 0;
+
+/* Usable-RAM region table (post-Limine), consumed by the frame allocator.
+   Regions are physical [base, base+len) spans the allocator may hand out. */
+#define BOOT_MAX_REGIONS 16u /* must match bootinfo.h */
+boot_mem_region_t g_boot_regions[BOOT_MAX_REGIONS];
+u32 g_boot_region_count = 0;
 u64 g_kernel_phys_base = 0;
 u64 g_kernel_virt_base = 0;
 u64 g_memmap_total_low = 0;
@@ -120,8 +126,20 @@ int bootinfo_validate(void) {
     struct limine_memmap_entry** entries = (struct limine_memmap_entry**)mm->entries;
     for (u64 i = 0; i < mm->entry_count; i++) {
         u64 base = entries[i]->base, len = entries[i]->length;
-        if (entries[i]->type == LIMINE_MEMMAP_USABLE) {
+        /* This Limine fork reindexes memmap types 0-based:
+           0=usable, 6=kernel-and-modules (the bulk RAM span).
+           Both are pool-eligible once the kernel image itself is
+           excluded by the frame allocator. */
+        int pool_eligible = (entries[i]->type == LIMINE_MEMMAP_USABLE ||
+                             entries[i]->type == LIMINE_MEMMAP_KERNEL_AND_MODULES);
+        if (pool_eligible) {
             g_memmap_total_low += len;
+        }
+        if (pool_eligible &&
+            g_boot_region_count < BOOT_MAX_REGIONS && len >= FRAME_SIZE_4K) {
+            g_boot_regions[g_boot_region_count].base = base;
+            g_boot_regions[g_boot_region_count].len = len;
+            g_boot_region_count++;
         }
         if (base <= 0x20000000ull && base + len >= 0x1fb7e000ull) {
             serial_write("[bootinfo] has 0x1fb7e000: type=");
@@ -133,6 +151,22 @@ int bootinfo_validate(void) {
             serial_writeln("");
         }
     }
+
+#ifdef BOOT_MEMMAP_VERBOSE
+    for (u64 i = 0; i < mm->entry_count; i++) {
+        serial_write("[memmap] n=");
+        serial_write_dec(mm->entry_count);
+        serial_write(" i=");
+        serial_write_dec((u32)i);
+        serial_write(" t=");
+        serial_write_dec((u32)entries[i]->type);
+        serial_write(" base_mib=");
+        serial_write_dec((u32)(entries[i]->base >> 20));
+        serial_write(" len_mib=");
+        serial_write_dec((u32)(entries[i]->length >> 20));
+        serial_putc('\n');
+    }
+#endif
 
     if (limine_fb_request.response != 0 && limine_fb_request.response->framebuffer_count > 0) {
         struct limine_framebuffer** fblist =
