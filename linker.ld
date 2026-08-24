@@ -65,12 +65,12 @@ SECTIONS {
 
     /* Kernel heap backing.  Lives in the zeroed, Limine-backed image tail so
        no frames have to be carved out of the frame allocator for it.
-       HW-max: 1 GiB static reserve — the RAM-disk fallback alone needs
-       512 MiB, and a 4 GiB machine has plenty of address space for it. */
+       16 MiB covers observed kmalloc peak with headroom; large buffers are
+       frame-allocated on demand instead. */
     . = ALIGN(4096);
     __heap_start = .;
     .heap (NOLOAD) : {
-        . = . + 64 * 1024 * 1024;
+        . = . + 16 * 1024 * 1024;
     } :data
     __heap_end = .;
 

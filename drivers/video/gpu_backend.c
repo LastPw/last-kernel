@@ -15,8 +15,8 @@
 static gpu_backend_type_t g_backend = GPU_BACKEND_NONE;
 
 /* ── CPU backend framebuffer ── */
-#define CPU_FB_MAX_W  1920u
-#define CPU_FB_MAX_H  1080u
+#define CPU_FB_MAX_W  1280u
+#define CPU_FB_MAX_H  800u
 static u32 g_cpu_fb[CPU_FB_MAX_W * CPU_FB_MAX_H];
 static u32 g_cpu_width;
 static u32 g_cpu_height;

@@ -8,8 +8,8 @@
 /* HW-max: 256 kernel page tables + 256 user address spaces; the old
    64/32/16 pool crowded 2-4 GiB machines. */
 #define PAGE_TABLE_POOL 256u
-#define USER_SPACE_COUNT 256u
-#define USER_SPACE_TABLE_POOL 128u
+#define USER_SPACE_COUNT 16u   /* concurrent user spaces */
+#define USER_SPACE_TABLE_POOL 64u /* PT pages/space: 1 GiB VA @2M pages */
 #define PAGE_SIZE 4096u
 
 #define PAGING_DEBUG 0

@@ -19,8 +19,8 @@
    keeps the kernel image well under 2 GiB so the -mcmodel=kernel base and
    the .heap reserve never collide. */
 #define USER_STACK_PAGES 512u
-#define ELF_MAX_PROCESSES 512u
-#define ELF_MAX_MAPPED_PAGES 8192u
+#define ELF_MAX_PROCESSES 32u
+#define ELF_MAX_MAPPED_PAGES 1024u
 #define ELF_MAX_HEAP_ALLOCS 1024u
 /* Heap grows down from just below the top of the 64-bit user range. */
 #define USER_HEAP_BASE 0x4000000000ull   /* 256 GiB — far inside user VMA (2^38) */

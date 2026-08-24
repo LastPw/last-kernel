@@ -1,6 +1,6 @@
 #include "compat_bbf.h"
 
-#define BBF_MAX_TASK 128u
+#define BBF_MAX_TASK 16u
 #define BBF_MAX_CLUSTER 128u
 
 typedef struct {

@@ -5,7 +5,7 @@
 #include "serial.h"
 #include "process_monitor.h"
 
-#define MAX_TASKS 2048
+#define MAX_TASKS 512
 
 static task_struct_t s_tasks[MAX_TASKS];
 static u32 s_task_count = 0;

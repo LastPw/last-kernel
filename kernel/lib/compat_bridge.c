@@ -1,7 +1,7 @@
 #include "compat_bridge.h"
 #include "timer.h"
 
-#define CB_MAX_TASKS 4096u
+#define CB_MAX_TASKS 256u
 #define CB_MAX_RULES 384u
 #define CB_MAX_CHAIN 512u
 #define CB_MAX_WINDOW 64u

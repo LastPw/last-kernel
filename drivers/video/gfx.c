@@ -1,4 +1,8 @@
 #include "gfx.h"
+#include "frame_allocator.h"
+
+static u32 s_bb_w = 0u, s_bb_h = 0u;
+static int gfx_backbuffers_alloc(u32 w, u32 h);
 #include "io.h"
 #include "paging.h"
 #include "screen.h"
@@ -328,6 +332,10 @@ static void vga_set_palette_256(void) {
 }
 
 void gfx_set_boot_framebuffer(u64 phys, u64 virt, u32 width, u32 height, u32 pitch, u16 bpp) {
+    /* Buffers cannot be allocated here: this runs before the frame
+       allocator exists. gfx_backbuffers_ensure() is called on first use. */
+    s_bb_w = width;
+    s_bb_h = height;
     limine_fb_phys = phys;
     limine_fb_virt = virt;
     limine_fb_width = width;
@@ -615,8 +623,38 @@ void gfx_restore_text(void) {
 #define MAX_GFX_W 1920u
 #define MAX_GFX_H 1080u
 
-static u32 s_backbuffer[MAX_GFX_W * MAX_GFX_H];
-static rgba64_t s_hdr_backbuffer[MAX_GFX_W * MAX_GFX_H];
+/* Backbuffers are allocated once the live mode is known instead of
+   reserving worst-case 1920x1080 x(4+8) bytes of .bss forever. */
+static u32* s_backbuffer = 0;
+static rgba64_t* s_hdr_backbuffer = 0;
+
+static u8 order_for(u32 pages) {
+    u8 o = 0u;
+    while ((1u << o) < pages && o < 20u) o++;
+    return o;
+}
+
+static int gfx_backbuffers_ensure(void) {
+    if (s_backbuffer) return 0;
+    return gfx_backbuffers_alloc(s_bb_w, s_bb_h);
+}
+
+static int gfx_backbuffers_alloc(u32 w, u32 h) {
+    if (w == 0u || h == 0u) return -1;
+    if (w > MAX_GFX_W) w = MAX_GFX_W;
+    if (h > MAX_GFX_H) h = MAX_GFX_H;
+    if (s_backbuffer && s_bb_w == w && s_bb_h == h) return 0;
+    u32 pages = ((u64)w * h * (sizeof(u32) + sizeof(rgba64_t)) + 4095u) / 4096u;
+    void* block = frame_alloc_dma32_order(order_for(pages));
+    if (!block) return -1;
+    void* kva = (void*)paging_phys_to_virt((u64)(uintptr_t)block);
+    u32* nb = (u32*)kva;
+    s_hdr_backbuffer = (rgba64_t*)(nb + (u64)w * h);
+    s_backbuffer = nb;
+    s_bb_w = w;
+    s_bb_h = h;
+    return 0;
+}
 static u8 s_hdr_enabled = 1u;
 
 void gfx_enable_hdr64(u8 enable) {
@@ -650,6 +688,8 @@ u32 gfx_rgba64_to_rgb(rgba64_t c) {
 }
 
 void gfx_px_blend64(u32 x, u32 y, u16 r, u16 g, u16 b, u16 a) {
+    if (gfx_backbuffers_ensure() != 0) return;
+
     if (!in_graphics || a == 0u || x >= phys_w || y >= phys_h) return;
     u32 idx = y * phys_w + x;
     if (idx >= MAX_GFX_W * MAX_GFX_H) return;
@@ -671,6 +711,8 @@ void gfx_px_blend64(u32 x, u32 y, u16 r, u16 g, u16 b, u16 a) {
 }
 
 void gfx_rect64(u32 x, u32 y, u32 w, u32 h, rgba64_t color) {
+    if (gfx_backbuffers_ensure() != 0) return;
+
     if (!in_graphics || w == 0u || h == 0u) return;
     if (x >= phys_w || y >= phys_h) return;
     if (w > phys_w - x) w = phys_w - x;
@@ -688,6 +730,8 @@ void gfx_rect64(u32 x, u32 y, u32 w, u32 h, rgba64_t color) {
 }
 
 void gfx_gradient_v64(u32 x, u32 y, u32 w, u32 h, rgba64_t top, rgba64_t bottom) {
+    if (gfx_backbuffers_ensure() != 0) return;
+
     if (!in_graphics || w == 0u || h == 0u) return;
     if (x >= phys_w || y >= phys_h) return;
     if (w > phys_w - x) w = phys_w - x;
@@ -714,6 +758,8 @@ static const u8 BAYER_4X4[4][4] = {
 
 /* ── 1. True Frosted Glass Gaussian Box Blur Engine ── */
 void gfx_frosted_glass_blur(u32 x, u32 y, u32 w, u32 h, u32 radius, u32 tint_color, u8 tint_alpha) {
+    if (gfx_backbuffers_ensure() != 0) return;
+
     if (!in_graphics || w == 0u || h == 0u) return;
     if (x >= phys_w || y >= phys_h) return;
     if (w > phys_w - x) w = phys_w - x;

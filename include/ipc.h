@@ -3,7 +3,7 @@
 
 #include "types.h"
 
-#define IPC_MAX_TASKS 4096
+#define IPC_MAX_TASKS 512
 #define IPC_QUEUE_CAP 16
 #define IPC_MSG_MAX 64
 #define IPC_RATE_WINDOW_TICKS 64u
