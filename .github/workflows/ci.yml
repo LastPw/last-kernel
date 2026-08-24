@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc nasm xorriso python3
+
+      - name: Install Rust bare-metal target
+        run: |
+          rustup target add x86_64-unknown-none
+
+      - name: Build kernel ELF
+        run: make
+
+      - name: Run test suites (AES KATs, LastFS journaling, WireGuard noise)
+        run: make test
+
+      - name: QEMU boot smoke-test
+        timeout-minutes: 3
+        run: |
+          make iso
+          sudo apt-get install -y qemu-system-x86
+          timeout 60 qemu-system-x86_64 -cdrom build/lastkernel.iso \
+            -m 512M -serial stdio -display none > boot.log 2>&1 || true
+          grep -q "Initializing kernel debug & diagnostics shell" boot.log
+          ! grep -qi "panic\|triple fault" boot.log
