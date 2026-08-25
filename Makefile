@@ -99,6 +99,7 @@ C_OBJS := \
 	$(BUILD_DIR)/ipv6_transport.o \
 	$(BUILD_DIR)/ethernet.o \
 	$(BUILD_DIR)/tcp_raw.o \
+	$(BUILD_DIR)/tcp_window.o \
 	$(BUILD_DIR)/udp_raw.o \
 	$(BUILD_DIR)/dns.o \
 	$(BUILD_DIR)/dhcp.o \
@@ -465,6 +466,9 @@ $(BUILD_DIR)/ethernet.o: net/ethernet.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/tcp_raw.o: net/tcp_raw.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/tcp_window.o: net/tcp_window.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/udp_raw.o: net/udp_raw.c | $(BUILD_DIR)

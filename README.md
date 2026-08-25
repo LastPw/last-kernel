@@ -68,7 +68,6 @@
 - **Linux compat**: syscall translation surface only; no dynamic-linker support.
 
 ## Not Implemented (roadmap)
-- Robust TCP (retransmit, congestion control).
 - eBPF, kprobes, io_uring (removed as non-functional stubs; to be reimplemented properly or not at all).
 - ACPI power management, hotplug.
 

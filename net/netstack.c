@@ -2,6 +2,7 @@
 #include "ethernet.h"
 #include "ip.h"
 #include "tcp_raw.h"
+#include "tcp_window.h"
 #include "udp_raw.h"
 #include "lastmap.h"
 #include "lastshark.h"
@@ -158,6 +159,11 @@ static u32 tcp_clamp_rto(u32 rto) {
     if (rto < TCP_RTO_MIN) return TCP_RTO_MIN;
     if (rto > TCP_RTO_MAX) return TCP_RTO_MAX;
     return rto;
+}
+
+static u16 tcp_advertise_window(u32 slot) {
+    if (slot >= SOCK_MAX) return 65535u;
+    return (u16)tcp_adv_from_slots(g_sock_rx_count[slot], SOCK_RX_CAP, 65535u);
 }
 
 static void tcp_on_ack(net_socket_info_t* sk, u32 now, u32 sample_ticks) {
@@ -440,6 +446,7 @@ static void handle_ipv6(const u8* l3, u16 l3_len, const u8 src_mac[6]) {
         data_len = (u16)(payload_len - tcp_hlen);
         sk = socket_match6(IP_PROTO_TCP, dst_port, ip->src, src_port);
         if (sk >= 0) {
+            g_sock[sk].snd_wnd = ip_htons(tcp->window);
             net_socket_info_t* socket = &g_sock[(u32)sk];
             if (tcp->flags & TCP_FLAG_RST) { socket_abort_slot((u32)sk); return; }
             if ((tcp->flags & TCP_FLAG_SYN) && (tcp->flags & TCP_FLAG_ACK) && socket->state == NET_SOCKET_SYN_SENT) {
@@ -754,6 +761,7 @@ if (ip->proto == IP_PROTO_TCP) {
     }
     {
         int sk = socket_match(IP_PROTO_TCP, dst_port, src_ip, src_port);
+        if (sk >= 0) g_sock[sk].snd_wnd = ip_htons(tcp->window);
         if (sk < 0 && (tcp->flags & TCP_FLAG_SYN) && !(tcp->flags & TCP_FLAG_ACK)) {
             int listener = socket_listener(IP_PROTO_TCP, dst_port);
             if (listener >= 0) {
@@ -767,10 +775,11 @@ if (ip->proto == IP_PROTO_TCP) {
                     g_sock[ci].parent_id = g_sock[(u32)listener].id;
                     g_sock[ci].tx_seq = tcp_initial_sequence(g_sock[ci].id);
                     g_sock[ci].rx_seq = ip_htonl(tcp->seq) + 1u;
+                    g_sock[ci].snd_wnd = ip_htons(tcp->window);
                     g_sock_rx_head[ci] = 0u; g_sock_rx_tail[ci] = 0u; g_sock_rx_count[ci] = 0u;
                     g_st.sockets_open++;
                     (void)tcp_raw_send_syn_ack(g_st.local_ip, src_ip, dst_port, src_port,
-                                               g_sock[ci].tx_seq, g_sock[ci].rx_seq);
+                                               g_sock[ci].tx_seq, g_sock[ci].rx_seq, 65535u);
                     sk = (int)ci;
                     break;
                 }
@@ -784,6 +793,15 @@ if (ip->proto == IP_PROTO_TCP) {
             if (tcp->flags & TCP_FLAG_RST) {
                 socket_abort_slot((u32)sk);
                 } else {
+                if ((tcp->flags & TCP_FLAG_ACK)) {
+                    u32 flight_end = socket->pending_seq + socket->pending_len;
+                    if (socket->tx_pending && ack >= flight_end) {
+                        socket->snd_wnd = ip_htons(tcp->window);
+                    } else if (socket->tx_pending && ack > socket->pending_seq) {
+                        /* partial ACK still refreshes peer window */
+                        socket->snd_wnd = ip_htons(tcp->window);
+                    }
+                }
                 if ((tcp->flags & TCP_FLAG_ACK) && socket->tx_pending &&
                     ack >= socket->pending_seq + socket->pending_len) {
                     u32 sample = timer_ticks() - socket->tx_timestamp;
@@ -803,21 +821,24 @@ if (ip->proto == IP_PROTO_TCP) {
                     socket->rx_seq = seq + 1u;
                     socket->state = NET_SOCKET_ESTABLISHED;
                     (void)tcp_raw_send_ack(g_st.local_ip, src_ip, dst_port, src_port,
-                                           socket->tx_seq, socket->rx_seq);
+                                           socket->tx_seq, socket->rx_seq,
+                                           tcp_advertise_window((u32)sk));
                 }
                 if (payload_len > 0u && socket->state == NET_SOCKET_ESTABLISHED) {
                     if (seq == socket->rx_seq) {
                         socket_queue_packet(sk, src_ip, src_port, l4 + tcp_hlen, payload_len);
                         socket->rx_seq += payload_len;
                         (void)tcp_raw_send_ack(g_st.local_ip, src_ip, dst_port, src_port,
-                                               socket->tx_seq, socket->rx_seq);
+                                               socket->tx_seq, socket->rx_seq,
+                                               tcp_advertise_window((u32)sk));
                     }
                 }
                 if ((tcp->flags & TCP_FLAG_FIN) && socket->state != 0u) {
                     socket->rx_seq = seq + payload_len + 1u;
                     socket->state = NET_SOCKET_CLOSING;
                     (void)tcp_raw_send_ack(g_st.local_ip, src_ip, dst_port, src_port,
-                                           socket->tx_seq, socket->rx_seq);
+                                           socket->tx_seq, socket->rx_seq,
+                                           tcp_advertise_window((u32)sk));
                 }
             }
         }
@@ -1123,9 +1144,11 @@ int netstack_socket_open(u32 proto, u16 local_port, u32 remote_ip, u16 remote_po
             g_sock[i].tx_pending = 0u;
             g_sock[i].dup_acks = 0u;
             g_sock[i].rto_ticks = TCP_INITIAL_RTO;
+            g_sock[i].snd_wnd = 65535u;
             g_sock[i].srtt_ticks = 0u;
             g_sock[i].rttvar_ticks = 0u;
             g_sock[i].cwnd_bytes = TCP_MSS;
+            g_sock[i].snd_wnd = 65535u;
             g_sock[i].ssthresh_bytes = 8192u;
             g_sock[i].tx_timestamp = 0u;
             g_sock[i].ipv6 = 0u;
@@ -1179,7 +1202,9 @@ int netstack_socket_open6(u32 proto, u16 local_port, const u8 remote_ip[16], u16
             g_sock[i].valid = 1u; g_sock[i].id = g_sock_next++; g_sock[i].proto = proto;
             g_sock[i].local_port = local_port; g_sock[i].remote_port = remote_port; g_sock[i].state = 1u; g_sock[i].ipv6 = 1u;
             g_sock[i].rto_ticks = TCP_INITIAL_RTO;
+            g_sock[i].snd_wnd = 65535u;
             g_sock[i].cwnd_bytes = TCP_MSS;
+            g_sock[i].snd_wnd = 65535u;
             g_sock[i].ssthresh_bytes = 8192u;
             g_sock[i].owner_task = 0u;
             memcpy(g_sock[i].remote_ipv6, remote_ip, 16u);
@@ -1306,8 +1331,13 @@ int netstack_socket_send(u32 sock_id, const u8* data, u16 len) {
     if (sk->proto == IP_PROTO_TCP) {
         if (len != 0u || data != 0) {
             if (sk->state != NET_SOCKET_ESTABLISHED) return -4;
+            {   /* flow control: honour congestion window and peer window */
+                u32 eff = tcp_eff_window(sk->cwnd_bytes, sk->snd_wnd);
+                if (!tcp_can_send(sk->pending_len, len, eff)) return -7;
+            }
             int rc = tcp_raw_send_data(g_st.local_ip, sk->remote_ip, sk->local_port,
-                                       sk->remote_port, sk->tx_seq, sk->rx_seq, data, len);
+                                       sk->remote_port, sk->tx_seq, sk->rx_seq, data, len,
+                                       tcp_advertise_window(s));
             if (rc == 0) {
                 if (len > sizeof(g_sock_tx[(u32)s])) return -6;
                 memcpy(g_sock_tx[(u32)s], data, len);
@@ -1328,6 +1358,7 @@ int netstack_socket_send(u32 sock_id, const u8* data, u16 len) {
         sk->tx_retries = 0u;
         sk->dup_acks = 0u;
         sk->rto_ticks = TCP_INITIAL_RTO;
+        sk->snd_wnd = 65535u;
         sk->tx_timestamp = timer_ticks();
         g_sock_tx_tick[(u32)s] = sk->tx_timestamp;
         return tcp_raw_send_syn(g_st.local_ip, sk->remote_ip, sk->local_port, sk->remote_port, sk->tx_seq);
@@ -1390,8 +1421,11 @@ void netstack_tick(void) {
                 g_sock_tx_tick[i] = now;
             }
         } else if (sk->state == NET_SOCKET_ESTABLISHED && sk->tx_pending &&
-                   (sk->dup_acks >= 3u || (now - g_sock_tx_tick[i]) >= rto)) {
-            if (sk->tx_retries >= TCP_MAX_RETRIES) {
+                   ((sk->dup_acks >= 3u && sk->snd_wnd != 0u) ||
+                    (now - g_sock_tx_tick[i]) >= rto ||
+                    (sk->snd_wnd == 0u && (now - g_sock_tx_tick[i]) >= rto))) {
+            /* zero-window: keep probing without aborting the socket */
+            if (sk->tx_retries >= TCP_MAX_RETRIES && sk->snd_wnd != 0u) {
                 socket_abort_slot(i);
                 continue;
             }
@@ -1404,7 +1438,8 @@ void netstack_tick(void) {
                                          TCP_FLAG_ACK | TCP_FLAG_PSH, g_sock_tx[i], sk->pending_len);
             } else if (netstack_prepare_peer(sk->remote_ip, 0u) == 0) {
                 sent = tcp_raw_send_data(g_st.local_ip, sk->remote_ip, sk->local_port, sk->remote_port,
-                                         sk->pending_seq, sk->rx_seq, g_sock_tx[i], sk->pending_len);
+                                         sk->pending_seq, sk->rx_seq, g_sock_tx[i], sk->pending_len,
+                                         65535u);
             }
             if (sent == 0) {
                 sk->tx_retries++;

@@ -22,9 +22,9 @@ typedef struct __attribute__((packed)) {
 } tcp_header_t;
 
 int tcp_raw_send_syn(u32 src_ip, u32 dst_ip, u16 src_port, u16 dst_port, u32 seq);
-int tcp_raw_send_syn_ack(u32 src_ip, u32 dst_ip, u16 src_port, u16 dst_port, u32 seq, u32 ack);
-int tcp_raw_send_ack(u32 src_ip, u32 dst_ip, u16 src_port, u16 dst_port, u32 seq, u32 ack);
+int tcp_raw_send_syn_ack(u32 src_ip, u32 dst_ip, u16 src_port, u16 dst_port, u32 seq, u32 ack, u16 window);
+int tcp_raw_send_ack(u32 src_ip, u32 dst_ip, u16 src_port, u16 dst_port, u32 seq, u32 ack, u16 window);
 int tcp_raw_send_data(u32 src_ip, u32 dst_ip, u16 src_port, u16 dst_port,
-                      u32 seq, u32 ack, const u8* payload, u16 payload_len);
+                      u32 seq, u32 ack, const u8* payload, u16 payload_len, u16 window);
 
 #endif

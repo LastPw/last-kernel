@@ -35,6 +35,7 @@ typedef struct {
     u8 tx_retries;
     u8 tx_pending;
     u16 dup_acks;
+    u16 snd_wnd;   /* peer-advertised receive window (bytes) */
     u32 rto_ticks;
     u32 srtt_ticks;
     u32 rttvar_ticks;
