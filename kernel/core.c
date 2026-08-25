@@ -743,7 +743,7 @@ static int kmod_mm(void) {
     slab_init();
     kernel_self_test();
     if (boot_mode_requested != BOOT_MODE_SAFE) {
-        memory_protect_guard_page((u32)((u64)KERNEL_HEAP_START + (u64)KERNEL_HEAP_SIZE));
+        memory_protect_guard_page((u64)(uintptr_t)KERNEL_HEAP_START + (u64)KERNEL_HEAP_SIZE);
     }
     serial_writeln("[LastOS] init: heap");
     return 0;

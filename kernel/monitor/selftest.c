@@ -1,6 +1,7 @@
 #include "selftest.h"
 #include "heap.h"
 #include "frame_allocator.h"
+#include "serial.h"
 #include "file.h"
 #include "scheduler.h"
 #include "pcoe2.h"
@@ -45,6 +46,11 @@ static void pass_step(u32 step) {
 }
 
 static void fail_step(u32 step, u32 err) {
+    serial_write("[selftest][FAIL] step=");
+    serial_write_dec(step);
+    serial_write(" err=");
+    serial_write_dec(err);
+    serial_putc('\n');
     last.total++;
     last.failed++;
     last.last_step = step;
