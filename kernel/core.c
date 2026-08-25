@@ -845,6 +845,9 @@ static int kmod_services(void) {
     ahci_init();
     ide_init();
     ac97_init();
+    /* Auto-boot-chirp disabled: PCI detection of the AC'97 device is
+       currently flaky across boots and the post-playback path needs
+       stabilisation. Use the 'audio beep/test' shell commands instead. */
     vbe_init(0, 0, 0, 0, 0);
     virtio_gpu_init();
     gpu_drm_init();

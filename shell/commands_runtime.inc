@@ -1348,3 +1348,39 @@ static void cmd_ghost(const char* args) {
 }
 
 
+
+#include "ac97.h"
+
+static void cmd_audio(const char* args) {
+    char sub[16], a1[16], a2[16];
+    args = read_token(skip_space(args), sub, sizeof(sub));
+
+    if (!sub[0] || str_cmp(sub, "status") == 0) {
+        kputs("audio backend: ");
+        if (ac97_available()) {
+            kputs("AC'97 (PCI)\nDAC rate: ");
+            print_u32(ac97_sample_rate());
+            kputs(" Hz\n");
+        } else {
+            kputs("none\n");
+        }
+        return;
+    }
+    if (str_cmp(sub, "beep") == 0) {
+        u32 hz = 440u, ms = 300u;
+        args = read_token(skip_space(args), a1, sizeof(a1));
+        read_token(skip_space(args), a2, sizeof(a2));
+        if (a1[0]) parse_u32(a1, &hz);
+        if (a2[0]) parse_u32(a2, &ms);
+        if (ac97_beep((u16)hz, ms) == 0) { kputs("beeped "); print_u32(hz); kputs(" Hz for "); print_u32(ms); kputs(" ms\n"); }
+        else kputs("no audio device\n");
+        return;
+    }
+    if (str_cmp(sub, "test") == 0) {
+        static const u16 seq[] = { 523, 659, 784, 1047 };
+        for (u32 i = 0; i < 4u; i++) (void)ac97_beep(seq[i], 180u);
+        kputs("C-E-G-C tone sequence played\n");
+        return;
+    }
+    kputs("Usage: audio status|beep <hz> <ms>|test\n");
+}
