@@ -16,7 +16,8 @@ typedef enum {
     FS_TYPE_FAT = 3,
     FS_TYPE_NTFS = 4,
     FS_TYPE_EXT4 = 5,
-    FS_TYPE_EXT3 = 6
+    FS_TYPE_EXT3 = 6,
+    FS_TYPE_ISO9660 = 7
 } fs_type_t;
 
 /* Filesystem driver interface - implemented by each filesystem type */

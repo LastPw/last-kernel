@@ -87,6 +87,7 @@ C_OBJS := \
 	$(BUILD_DIR)/minix.o \
 	$(BUILD_DIR)/persistent_disk.o \
 	$(BUILD_DIR)/lastfs.o \
+	$(BUILD_DIR)/iso9660.o \
 	$(BUILD_DIR)/file.o \
 	$(BUILD_DIR)/e1000.o \
 	$(BUILD_DIR)/rtl8169.o \
@@ -431,6 +432,9 @@ $(BUILD_DIR)/persistent_disk.o: fs/persistent_disk.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/lastfs.o: fs/lastfs.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/iso9660.o: fs/iso9660.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/file.o: fs/file.c | $(BUILD_DIR)
@@ -909,6 +913,10 @@ test:
 	./$(BUILD_DIR)/tests/wg_noise_tests
 	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/fat_tests tests/fat_tests.c
 	./$(BUILD_DIR)/tests/fat_tests
+	gcc -O2 -w -iquote include -o $(BUILD_DIR)/tests/iso_tests tests/iso_tests.c
+	./$(BUILD_DIR)/tests/iso_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/tcp_window_tests tests/tcp_window_tests.c net/tcp_window.c
+	./$(BUILD_DIR)/tests/tcp_window_tests
 
 qemu: $(BUILD_DIR)/lastkernel.iso
 	qemu-system-x86_64 -cdrom $(BUILD_DIR)/lastkernel.iso -m 512M -serial stdio

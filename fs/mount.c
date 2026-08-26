@@ -1,4 +1,5 @@
 #include "mount.h"
+#include "fs_iso9660.h"
 #include "fs_minix.h"
 #include "fs_ext2.h"
 #include "fs_fat.h"
@@ -148,6 +149,21 @@ int mount_init(void) {
         ntfs_drv.info = ntfs_info;
         ntfs_drv.format = ntfs_format;
         fs_register_driver(&ntfs_drv);
+    }
+    {
+        static fs_driver_t iso_drv;
+        str_cpy(iso_drv.name, "iso9660");
+        iso_drv.type = FS_TYPE_ISO9660;
+        iso_drv.mount = iso9660_mount;
+        iso_drv.umount = iso9660_umount;
+        iso_drv.list = iso9660_list;
+        iso_drv.read = iso9660_read;
+        iso_drv.write = iso9660_write;
+        iso_drv.create = iso9660_create;
+        iso_drv.delete = iso9660_delete;
+        iso_drv.info = iso9660_info;
+        iso_drv.format = iso9660_format;
+        fs_register_driver(&iso_drv);
     }
     return 0;
 }
