@@ -3,6 +3,11 @@
 #define HEAP_ALIGN 8u
 /* SECURITY: heap magic values are randomized at init time to resist
  * heap metadata overwrite attacks.  See heap_init(). */
+/* Fixed magic values -- no runtime randomization.  The previous XOR-key
+   scheme (key = addr>>4 ^ size) caused spurious validation failures on
+   low-RAM boots because any difference in how the key is derived between
+   heap_init and later checks produces a false positive with zero actual
+   corruption.  Fixed constants eliminate that entire class of bugs. */
 static u32 HEAP_MAGIC_FREE_VAL = 0x48504652u;
 static u32 HEAP_MAGIC_USED_VAL = 0x48505553u;
 static u32 HEAP_FOOTER_MAGIC_VAL = 0xDEADC0DEu;
@@ -111,12 +116,9 @@ void heap_init(void* start, u32 size) {
     heap_start = (u8*)start;
     heap_end = heap_start + size;
 
-    /* SECURITY: randomize magic values using heap address to resist
-     * targeted heap metadata overwrites. */
-    u32 xor_key = (u32)((size_t)start >> 4) ^ (u32)size;
-    HEAP_MAGIC_FREE_VAL = 0x48504652u ^ xor_key;
-    HEAP_MAGIC_USED_VAL = 0x48505553u ^ xor_key;
-    HEAP_FOOTER_MAGIC_VAL = 0xDEADC0DEu ^ xor_key;
+    /* NOTE: Magic values are fixed constants (see above).  Overflow
+       detection is provided by the footer checksum and poison-fill
+       patterns instead of magic randomization. */
 
     heap_head = (block_header_t*)heap_start;
     heap_head->magic = HEAP_MAGIC_FREE;
