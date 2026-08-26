@@ -5,7 +5,7 @@
 #include "interrupts.h"
 
 #define KSHIELD_MAX_CHECKPOINTS 8u
-#define KSHIELD_MAX_TRACKED_TASKS 64u
+#define KSHIELD_MAX_TRACKED_TASKS 16u
 #define KSHIELD_SHADOW_PAGE_SIZE 4096u
 
 typedef struct {

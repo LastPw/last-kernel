@@ -15,7 +15,7 @@
 
 #define CE_SYSCALL_SPACE 512u
 #define CE_NATIVE_SPACE 64u
-#define CE_MAX_PROC 64u
+#define CE_MAX_PROC 16u
 #define CE_MAX_CACHE 256u
 #define CE_MAX_CHAIN 256u
 #define CE_MAX_EDGE 1024u
