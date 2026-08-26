@@ -1,6 +1,7 @@
 #include "smp.h"
 #include "hw_topology.h"
 #include "paging.h"
+#include "serial.h"
 #include "string.h"
 #include "apic.h"
 
@@ -53,14 +54,19 @@ void smp_init(void) {
 
 void smp_ap_entry(void) {
     u32 id = apic_lapic_id();
+    u32 hw_index = 0u;
     for (u32 i = 1u; i < g_smp.detected && i < HW_TOPO_MAX_CORES; i++) {
         if (hw_topology_core_apic_id(i) == id) {
             g_ap_online[i] = 1u;
+            hw_index = i;
             break;
         }
     }
     apic_lapic_eoi();
-    for (;;) __asm__ __volatile__("hlt");
+
+    /* Enter the per-core worker loop instead of halting forever. */
+    extern void ap_worker_entry(u32 hw_index);
+    ap_worker_entry(hw_index);
 }
 
 int smp_start_aps(void) {
@@ -74,6 +80,15 @@ int smp_start_aps(void) {
 
     u32 size = (u32)(ap_trampoline_end - ap_trampoline_start);
     if (size > 4096u) return -1;
+    /* Identity-map the trampoline page: after switching to the kernel's
+       higher-half CR3, the AP still reads its entry pointer from physical
+       low memory, so that page must be reachable at VA==PA. */
+    if (paging_map_range(AP_TRAMPOLINE & ~0xFFFull, AP_TRAMPOLINE & ~0xFFFull,
+                         4096u, PAGE_FLAG_RW | PAGE_FLAG_PRESENT) != 0) {
+        serial_writeln("[SMP] failed to identity-map trampoline page");
+        return -1;
+    }
+
     memcpy((void*)AP_TRAMPOLINE, ap_trampoline_start, size);
     u32 base = AP_TRAMPOLINE;
     *(u32*)(base + ((u32)ap_trampoline_cr3 - (u32)ap_trampoline_start)) = paging_cr3();

@@ -43,3 +43,4 @@ void idt_init(void) {
 
     idt_load((u64)&idt_ptr);
 }
+void* idt_descriptor(void) { return (void*)&idt_ptr; }

@@ -23,4 +23,5 @@ typedef struct {
 void idt_init(void);
 void idt_set_gate(u8 num, u64 base, u16 sel, u8 flags);
 
+void* idt_descriptor(void);
 #endif

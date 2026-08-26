@@ -42,6 +42,7 @@ C_OBJS := \
 	$(BUILD_DIR)/cpu_detect.o \
 	$(BUILD_DIR)/hw_topology.o \
 	$(BUILD_DIR)/smp.o \
+	$(BUILD_DIR)/ap_worker.o \
 	$(BUILD_DIR)/paging.o \
 	$(BUILD_DIR)/vm.o \
 	$(BUILD_DIR)/frame_allocator.o \
@@ -295,6 +296,9 @@ $(BUILD_DIR)/hw_topology.o: arch/x86_64/cpu/hw_topology.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/smp.o: arch/x86_64/cpu/smp.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ap_worker.o: arch/x86_64/cpu/ap_worker.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/paging.o: arch/x86_64/mmu/paging.c | $(BUILD_DIR)

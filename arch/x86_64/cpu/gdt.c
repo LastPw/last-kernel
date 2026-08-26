@@ -119,6 +119,7 @@ void gdt_init(void) {
     gp.base = (u64)&gdt;
 
     gdt_flush((u64)&gp);
+
     ltr_tss();
 
     /* Enable SSE for ring-3 user binaries (built -O2, they emit SSE).
@@ -154,3 +155,4 @@ void gdt_init(void) {
 void gdt_set_kernel_stack(u64 rsp0) {
     tss.rsp0 = rsp0;
 }
+void* gdt_descriptor(void) { return (void*)&gp; }

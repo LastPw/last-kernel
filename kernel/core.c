@@ -799,9 +799,13 @@ static int kmod_sched(void) {
     task_protect_set_range(0, 0x00000000, 0x00400000, TASK_PRIV_KERNEL);
     process_monitor_init();
     scheduler_init();
-    /* P1: the AP trampoline is still 32-bit; bring-up is BSP-only until the
-       long-mode trampoline lands in P2. */
     smp_init();
+    /* smp_start_aps() is wired but disabled: the INIT-SIPI sequence causes
+       a boot loop on QEMU -smp >1 (trampoline identity-mapping lands but
+       the APs still fault).  Needs a dedicated debugging session with
+       per-step serial traces through the SIPI path.
+       The ap_worker infrastructure (descriptor loading, work slots,
+       liveness counters) is fully implemented and ready for activation. */
     scheduler_set_core_count(1u);
     rust_bridge_init(detected_cores);
     rust_bridge_mem_init(detected_ram_bytes);

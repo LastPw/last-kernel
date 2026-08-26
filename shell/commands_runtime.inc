@@ -1384,3 +1384,22 @@ static void cmd_audio(const char* args) {
     }
     kputs("Usage: audio status|beep <hz> <ms>|test\n");
 }
+
+#include "ap_worker.h"
+#include "smp.h"
+
+static void cmd_cores(const char* args) {
+    (void)args;
+    extern u32 smp_online_count(void);
+    u32 online = smp_online_count();
+    u32 workers = ap_worker_core_count();
+    kputs("SMP online: "); print_u32(online);
+    kputs(" | worker cores: "); print_u32(workers);
+    kputc('\n');
+    for (u32 i = 0; i < 8; i++) {
+        if (!(ap_worker_online_mask() & (1u << i))) continue;
+        kputs("  core "); print_u32(i);
+        kputs(": ticks="); print_u32(ap_worker_tick_count(i));
+        kputc('\n');
+    }
+}
