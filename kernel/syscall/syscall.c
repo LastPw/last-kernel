@@ -11,7 +11,7 @@
 #include "gfx.h"
 #include "interrupts.h"
 #include "keyboard.h"
-#include "commands.h"
+#include "kconsole.h"
 #include "xhci.h"
 #include "mouse.h"
 #include "heap.h"
@@ -775,7 +775,7 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
             if (!scheduler_task_is_user(caller_task) || a1 == 0u || a2 < 2u ||
                 !security_has_cap(caller_task, SEC_CAP_SYS_ADMIN) ||
                 copy_user_str(a0, command, sizeof(command)) != 0) return (u32)-1;
-            rc = commands_execute_capture(command, output, sizeof(output));
+            rc = kconsole_exec_command(command, output, sizeof(output));
             while (output[used] && used + 1u < sizeof(output)) used++;
             if (used + 1u > a2) used = a2 - 1u;
             if (kcopy_to_user(a1, output, used + 1u) != 0) return (u32)-1;

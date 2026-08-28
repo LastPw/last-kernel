@@ -48,13 +48,13 @@ _start:
 ; this frame is untouched garbage-free.  shell_resume() drops the stale idle
 ; frame and runs the command loop again.
 global kernel_resume_trampoline
-extern shell_resume
+extern kconsole_resume
 kernel_resume_trampoline:
     cli
     lea rsp, [rel boot_stack_top]
     and rsp, -16
     cld
-    call shell_resume
+    call kconsole_resume
 .hang2:
     cli
     hlt

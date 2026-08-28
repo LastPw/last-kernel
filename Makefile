@@ -219,11 +219,7 @@ C_OBJS := \
 	$(BUILD_DIR)/tls_identity.o \
 	$(BUILD_DIR)/tls_bearssl.o \
 	$(BUILD_DIR)/bearssl_entropy.o \
-	$(BUILD_DIR)/shell.o \
-	$(BUILD_DIR)/commands.o \
-	$(BUILD_DIR)/shell_threatlog.o \
-	$(BUILD_DIR)/shell_processinfo.o \
-	$(BUILD_DIR)/shell_sysinfo_view.o
+	$(BUILD_DIR)/kconsole.o
 
 ALL_OBJS := $(ASM_OBJS) $(C_OBJS) $(RUST_LIB)
 
@@ -833,19 +829,7 @@ $(BUILD_DIR)/timing_engine.o: kernel/monitor/timing_engine.c | $(BUILD_DIR)
 $(BUILD_DIR)/udp_scan.o: kernel/monitor/udp_scan.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/shell.o: shell/shell.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/commands.o: shell/commands.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/shell_threatlog.o: shell/threatlog.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/shell_processinfo.o: shell/processinfo.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/shell_sysinfo_view.o: shell/sysinfo.c | $(BUILD_DIR)
+$(BUILD_DIR)/kconsole.o: kernel/kconsole.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # ------------------------------------------------------------------------------
