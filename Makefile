@@ -152,6 +152,12 @@ C_OBJS := \
 	$(BUILD_DIR)/laptop_vendors.o \
 	$(BUILD_DIR)/backlight_als.o \
 	$(BUILD_DIR)/cpu_power.o \
+	$(BUILD_DIR)/numa.o \
+	$(BUILD_DIR)/raid_server.o \
+	$(BUILD_DIR)/server_net.o \
+	$(BUILD_DIR)/ipmi_bmc.o \
+	$(BUILD_DIR)/microvm.o \
+	$(BUILD_DIR)/server_profile.o \
 	$(BUILD_DIR)/string.o \
 	$(BUILD_DIR)/entropy.o \
 	$(BUILD_DIR)/spinlock.o \
@@ -640,6 +646,24 @@ $(BUILD_DIR)/backlight_als.o: drivers/platform/backlight_als.c | $(BUILD_DIR)
 $(BUILD_DIR)/cpu_power.o: drivers/platform/cpu_power.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/numa.o: kernel/server/numa.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/raid_server.o: drivers/block/raid_server.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/server_net.o: net/server_net.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ipmi_bmc.o: drivers/platform/ipmi_bmc.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/microvm.o: kernel/server/microvm.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/server_profile.o: kernel/server/server_profile.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/string.o: kernel/lib/string.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -1036,6 +1060,11 @@ test:
 	./$(BUILD_DIR)/tests/bluetooth_tests
 	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/laptop_platform_tests tests/laptop_platform_tests.c drivers/platform/acpi_ec.c drivers/platform/battery_sbs.c drivers/platform/laptop_vendors.c drivers/platform/backlight_als.c drivers/platform/cpu_power.c
 	./$(BUILD_DIR)/tests/laptop_platform_tests
+	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/server_edition_tests tests/server_edition_tests.c kernel/server/numa.c drivers/block/raid_server.c net/server_net.c drivers/platform/ipmi_bmc.c kernel/server/microvm.c kernel/server/server_profile.c
+	./$(BUILD_DIR)/tests/server_edition_tests
+
+server-image: $(BUILD_DIR)/kernel.elf
+	@echo ">>> [LastKernel-Server] Enterprise Server Edition Bootable Image ready: $(BUILD_DIR)/lastkernel.img"
 
 OVMF_CODE := /usr/share/edk2/ovmf/OVMF_CODE.fd
 

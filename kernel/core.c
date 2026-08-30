@@ -48,6 +48,12 @@
 #include "nic.h"
 #include "bluetooth.h"
 #include "laptop_platform.h"
+#include "numa.h"
+#include "raid_server.h"
+#include "server_net.h"
+#include "ipmi_bmc.h"
+#include "microvm.h"
+#include "server_profile.h"
 #include "netstack.h"
 #include "httpd.h"
 #include "dhcp.h"
@@ -874,6 +880,12 @@ static int kmod_services(void) {
     laptop_vendors_init();
     backlight_als_init();
     cpu_power_init();
+    numa_init();
+    raid_server_init();
+    server_net_init();
+    ipmi_bmc_init();
+    microvm_subsystem_init();
+    server_profile_init();
     /* IPv6 link-local and NDP state depend on the NIC MAC being ready. */
     netstack_init();
     serial_write("[LastOS] NIC RTL8139 ready=");

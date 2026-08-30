@@ -5,6 +5,7 @@
 #include "nic.h"
 #include "bluetooth.h"
 #include "laptop_platform.h"
+#include "ipmi_bmc.h"
 #include "netstack.h"
 #include "resource_monitor.h"
 #include "self_heal.h"
@@ -188,6 +189,7 @@ void timer_on_irq(registers_t* regs) {
         laptop_vendors_poll();
         backlight_als_poll();
         cpu_power_poll();
+        ipmi_bmc_poll();
     }
 
     in_tick = 0;
