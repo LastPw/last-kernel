@@ -114,7 +114,8 @@ int  wifi_init(void);
 int  wifi_scan(wifi_ap_t* out_results, u32 max_count);
 int  wifi_connect(const char* ssid, const char* passphrase);
 int  wifi_disconnect(void);
-int  wifi_derive_ptk(const u8* pmk, const u8* addr1, const u8* addr2, const u8* anonce, const u8* snonce, u8* out_ptk);
+int  wifi_derive_ptk(const u8 pmk[32], const u8 addr1[WIFI_MAC_ADDR_LEN], const u8 addr2[WIFI_MAC_ADDR_LEN],
+                     const u8 nonce1[32], const u8 nonce2[32], u8 out_ptk[48]);
 u16  wifi_channel_to_freq(u8 channel);
 u8   wifi_freq_to_channel(u16 freq_mhz);
 int  wifi_rx_frame(const u8* frame_data, u32 len);

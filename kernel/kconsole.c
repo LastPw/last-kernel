@@ -681,60 +681,38 @@ static void cmd_sound_beep(void) {
 
 static void cmd_usb_storage_info(void) {
     kprintln("=== USB Mass Storage Subsystem (BOT / SCSI) ===");
-    usb_mass_device_t dev;
-    usb_mass_get_device_info(&dev);
-    kprint("  Status        : ");
-    kprintln(dev.is_attached ? "ATTACHED & READY" : "NO DRIVE DETECTED");
-    kprint("  Vendor / Model: ");
-    kprint(dev.vendor);
-    kprint(" ");
-    kprintln(dev.product);
-    kprint("  Revision      : ");
-    kprintln(dev.revision);
-    kprint("  Sector Count  : ");
-    kprint_u32(dev.total_sectors);
-    kprint(" (");
-    kprint_u32((dev.total_sectors * dev.sector_size) / (1024 * 1024));
-    kprintln(" MB Capacity)");
+    char vendor[16] = {0}, product[24] = {0}, rev[8] = {0};
+    u32 cap_mb = 0;
+    if (usb_mass_get_device_info(vendor, product, rev, &cap_mb) == 0) {
+        kprintln("  Status        : ATTACHED & READY");
+        kprint("  Vendor / Model: ");
+        kprint(vendor);
+        kprint(" ");
+        kprintln(product);
+        kprint("  Revision      : ");
+        kprintln(rev);
+        kprint("  Capacity      : ");
+        kprint_u32(cap_mb);
+        kprintln(" MB");
+    } else {
+        kprintln("  Status        : NO DRIVE DETECTED");
+    }
     kprintln("  Transport     : Bulk-Only Transport (BOT) with SCSI Transparent Command Set");
     kprintln("");
 }
 
 static void cmd_wifi_status(void) {
-    kprintln("=== LastKernel 802.11 Wireless Networking (Wi-Fi) ===");
-    wifi_status_t st;
-    wifi_get_status(&st);
-    kprint("  Hardware Adapter: ");
-    kprintln(st.driver_name);
-    kprint("  MAC Address     : ");
-    for (int i = 0; i < 6; i++) {
-        kprint_hex8(st.mac_addr[i]);
-        if (i < 5) kprint(":");
-    }
-    kprintln("");
-    kprint("  Status          : ");
-    if (st.is_connected) {
-        kprint("CONNECTED to '");
-        kprint(st.current_ssid);
-        kprint("' (Channel ");
-        kprint_u32((u32)st.current_channel);
-        kprint(", RSSI ");
-        kprint_u32((u32)(-st.current_rssi));
-        kprintln(" dBm)");
-    } else {
-        kprintln("DISCONNECTED (Ready to Scan / Connect)");
-    }
-    kprintln("");
+    wifi_get_status();
 }
 
 static void cmd_wifi_scan(void) {
     kprintln("--- Scanning 2.4 GHz and 5 GHz Wireless Spectrum ---");
-    wifi_scan_entry_t results[WIFI_MAX_SCAN_RESULTS];
-    u32 count = 0;
-    if (wifi_scan(results, WIFI_MAX_SCAN_RESULTS, &count) == 0 && count > 0) {
+    wifi_ap_t results[WIFI_MAX_AP_COUNT];
+    int count = wifi_scan(results, WIFI_MAX_AP_COUNT);
+    if (count > 0) {
         kprintln("  BSSID             | Ch | RSSI   | Security | SSID");
         kprintln(" -------------------+----+--------+----------+------------------------");
-        for (u32 i = 0; i < count; i++) {
+        for (int i = 0; i < count; i++) {
             kprint("  ");
             for (int b = 0; b < 6; b++) {
                 kprint_hex8(results[i].bssid[b]);
@@ -746,7 +724,7 @@ static void cmd_wifi_scan(void) {
             kprint(" | ");
             kprint_u32((u32)(-results[i].rssi_dbm));
             kprint("dBm | ");
-            switch (results[i].security_type) {
+            switch (results[i].security) {
                 case WIFI_SEC_WPA3_SAE: kprint("WPA3-SAE "); break;
                 case WIFI_SEC_WPA2_PSK: kprint("WPA2-PSK "); break;
                 case WIFI_SEC_WEP:      kprint("WEP      "); break;

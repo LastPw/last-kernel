@@ -166,7 +166,7 @@ static u16 tcp_advertise_window(u32 slot) {
     return (u16)tcp_adv_from_slots(g_sock_rx_count[slot], SOCK_RX_CAP, 65535u);
 }
 
-static void tcp_on_ack(net_socket_info_t* sk, u32 now, u32 sample_ticks) {
+static void tcp_socket_on_ack(net_socket_info_t* sk, u32 now, u32 sample_ticks) {
     if (!sk) return;
     if (sample_ticks != 0u) {
         if (sk->srtt_ticks == 0u) {
@@ -458,7 +458,7 @@ static void handle_ipv6(const u8* l3, u16 l3_len, const u8 src_mac[6]) {
                 if (socket->tx_pending && ack >= socket->pending_seq + socket->pending_len) {
                     u32 sample = timer_ticks() - socket->tx_timestamp;
                     socket->tx_pending = 0u; socket->pending_len = 0u;
-                    tcp_on_ack(socket, timer_ticks(), sample);
+                    tcp_socket_on_ack(socket, timer_ticks(), sample);
                 } else if (socket->tx_pending && ack == socket->pending_seq) {
                     socket->dup_acks++;
                 }
@@ -807,7 +807,7 @@ if (ip->proto == IP_PROTO_TCP) {
                     u32 sample = timer_ticks() - socket->tx_timestamp;
                     socket->tx_pending = 0u;
                     socket->pending_len = 0u;
-                    tcp_on_ack(socket, timer_ticks(), sample);
+                    tcp_socket_on_ack(socket, timer_ticks(), sample);
                 } else if ((tcp->flags & TCP_FLAG_ACK) && socket->tx_pending &&
                            ack == socket->pending_seq) {
                     socket->dup_acks++;
