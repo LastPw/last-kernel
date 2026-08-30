@@ -57,7 +57,7 @@ void serial_writeln(const char* msg) {
 }
 
 /* Include LastFS Implementation directly for host test */
-#include "../include/lastfs.h"
+#include "lastfs.h"
 #include "../fs/lastfs.c"
 
 int main(void) {

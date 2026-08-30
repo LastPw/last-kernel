@@ -11,7 +11,10 @@ RUSTC   := rustc
 CFLAGS  := -m64 -mcmodel=small -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
            -ffreestanding -fno-pic -fstack-protector-strong \
            -mstack-protector-guard=global -nostdlib -nostdinc \
-           -Iinclude -Wall -Wextra -O2
+           -Iinclude -Iinclude/common -Iinclude/kernel -Iinclude/drivers \
+           -Iinclude/fs -Iinclude/net -Iinclude/mm -Iinclude/security \
+           -Iinclude/crypto -Iinclude/apk -Iinclude/std \
+           -Wall -Wextra -O2
 
 ASFLAGS := -f elf64
 LDFLAGS := -T linker.ld -nostdlib
@@ -172,11 +175,7 @@ C_OBJS := \
 	$(BUILD_DIR)/resource_engine.o \
 	$(BUILD_DIR)/process_monitor.o \
 	$(BUILD_DIR)/memory_monitor.o \
-	$(BUILD_DIR)/io_guard.o \
-	$(BUILD_DIR)/threat_logger.o \
 	$(BUILD_DIR)/paniclog.o \
-	$(BUILD_DIR)/signature_updater.o \
-	$(BUILD_DIR)/kernel_monitor.o \
 	$(BUILD_DIR)/lastmap.o \
 	$(BUILD_DIR)/lastshark.o \
 	$(BUILD_DIR)/metrics.o \
@@ -189,15 +188,6 @@ C_OBJS := \
 	$(BUILD_DIR)/kinit.o \
 	$(BUILD_DIR)/proc_core.o \
 	$(BUILD_DIR)/pkg_manager.o \
-	$(BUILD_DIR)/controller.o \
-	$(BUILD_DIR)/banner.o \
-	$(BUILD_DIR)/connect_scan.o \
-	$(BUILD_DIR)/multicore_dispatch.o \
-	$(BUILD_DIR)/rate_limiter.o \
-	$(BUILD_DIR)/scan_table.o \
-	$(BUILD_DIR)/syn_scan.o \
-	$(BUILD_DIR)/timing_engine.o \
-	$(BUILD_DIR)/udp_scan.o \
 	$(BUILD_DIR)/plugin.o \
 	$(BUILD_DIR)/memlab.o \
 	$(BUILD_DIR)/schedlab.o \
@@ -713,19 +703,7 @@ $(BUILD_DIR)/process_monitor.o: kernel/monitor/process_monitor.c | $(BUILD_DIR)
 $(BUILD_DIR)/memory_monitor.o: kernel/monitor/memory_monitor.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/io_guard.o: kernel/monitor/io_guard.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/threat_logger.o: kernel/monitor/threat_logger.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/paniclog.o: kernel/monitor/paniclog.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/signature_updater.o: kernel/monitor/signature_updater.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/kernel_monitor.o: kernel/monitor/kernel_monitor.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/lastmap.o: kernel/monitor/lastmap.c | $(BUILD_DIR)
@@ -914,33 +892,6 @@ $(BUILD_DIR)/bearssl_entropy.o: crypto/bearssl_entropy.c | $(BUILD_DIR)
 $(BUILD_DIR)/pkg_manager.o: kernel/lib/pkg_manager.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/controller.o: kernel/monitor/controller.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/banner.o: kernel/monitor/banner.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/connect_scan.o: kernel/monitor/connect_scan.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/multicore_dispatch.o: kernel/monitor/multicore_dispatch.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/rate_limiter.o: kernel/monitor/rate_limiter.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/scan_table.o: kernel/monitor/scan_table.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/syn_scan.o: kernel/monitor/syn_scan.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/timing_engine.o: kernel/monitor/timing_engine.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/udp_scan.o: kernel/monitor/udp_scan.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/kconsole.o: kernel/kconsole.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -954,7 +905,7 @@ $(BUILD_DIR)/libbearssl.a: $(BEARSSL_SRCS) | $(BUILD_DIR)
 	@mkdir -p $(BUILD_DIR)/bearssl_obj
 	@for f in $(BEARSSL_SRCS); do \
 		gcc -m64 -mcmodel=kernel -mno-red-zone -ffreestanding -fno-pic -fno-stack-protector -fno-builtin \
-			-fno-asynchronous-unwind-tables -I"$(CURDIR)/include/std" -I"$(CURDIR)/crypto/bearssl" -I"$(CURDIR)/include" \
+			-fno-asynchronous-unwind-tables -I"$(CURDIR)/include/std" -I"$(CURDIR)/crypto/bearssl" -I"$(CURDIR)/include" -I"$(CURDIR)/include/crypto" \
 			-DBR_USE_UNIX_TIME=0 -Os \
 			-c "$$f" -o "$(BUILD_DIR)/bearssl_obj/$$(basename $$f .c).o" || exit 1; \
 	done
@@ -998,60 +949,64 @@ clean:
 	rm -rf $(BUILD_DIR) user/build
 	@$(MAKE) -C bootloader/pulse clean
 
+TEST_INCLUDES := -iquote include -iquote include/common -iquote include/kernel -iquote include/drivers \
+                 -iquote include/fs -iquote include/net -iquote include/mm -iquote include/security \
+                 -iquote include/crypto -iquote include/apk -iquote include/std
+
 test:
 	@echo ">>> [LastKernel] Running native Pulse Loader test matrix..."
 	@$(MAKE) -C bootloader/pulse test
 	@echo ">>> [LastKernel] Running kernel test suite..."
 	mkdir -p $(BUILD_DIR)/tests
 	awk '/^\/\* ==================== AES-128 Implementation/,/^\/\* ==================== PBKDF2/' kernel/security/fde.c | head -n -2 > $(BUILD_DIR)/tests/fde_aes_core.inc
-	gcc -O1 -Wall -Wextra -I$(BUILD_DIR)/tests -o $(BUILD_DIR)/tests/fde_aes_kat tests/fde_aes_kat.c
+	gcc -O1 -Wall -Wextra $(TEST_INCLUDES) -I$(BUILD_DIR)/tests -o $(BUILD_DIR)/tests/fde_aes_kat tests/fde_aes_kat.c
 	./$(BUILD_DIR)/tests/fde_aes_kat
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/lastfs_tests tests/lastfs_tests.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/lastfs_tests tests/lastfs_tests.c
 	./$(BUILD_DIR)/tests/lastfs_tests
 	@mkdir -p $(BUILD_DIR)/tests/bearssl_obj
 	@for f in $(BEARSSL_SRCS); do \
-		gcc -O2 -w -I"$(CURDIR)/include/std" -I"$(CURDIR)/include" -I"$(CURDIR)/crypto/bearssl" \
+		gcc -O2 -w $(TEST_INCLUDES) -I"$(CURDIR)/crypto/bearssl" \
 			-c "$$f" -o "$(BUILD_DIR)/tests/bearssl_obj/$$(basename $$f .c).o" || exit 1; \
 	done
 	ar rcs $(BUILD_DIR)/tests/libbearssl_host.a $(BUILD_DIR)/tests/bearssl_obj/*.o
-	gcc -O2 -Wall -Wextra -iquote include -Icrypto/bearssl -o $(BUILD_DIR)/tests/wg_noise_tests \
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -Icrypto/bearssl -o $(BUILD_DIR)/tests/wg_noise_tests \
 		tests/wg_noise_tests.c crypto/blake2s.c crypto/noise_ik.c $(BUILD_DIR)/tests/libbearssl_host.a
 	./$(BUILD_DIR)/tests/wg_noise_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/fat_tests tests/fat_tests.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/fat_tests tests/fat_tests.c
 	./$(BUILD_DIR)/tests/fat_tests
-	gcc -O2 -w -iquote include -o $(BUILD_DIR)/tests/iso_tests tests/iso_tests.c
+	gcc -O2 -w $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/iso_tests tests/iso_tests.c
 	./$(BUILD_DIR)/tests/iso_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/tcp_window_tests tests/tcp_window_tests.c net/tcp_window.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/tcp_window_tests tests/tcp_window_tests.c net/tcp_window.c
 	./$(BUILD_DIR)/tests/tcp_window_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/apk_core_tests tests/apk_core_tests.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/apk_core_tests tests/apk_core_tests.c
 	./$(BUILD_DIR)/tests/apk_core_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/apk_deep_tests tests/apk_deep_tests.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/apk_deep_tests tests/apk_deep_tests.c
 	./$(BUILD_DIR)/tests/apk_deep_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/apk_nextgen_tests tests/apk_nextgen_tests.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/apk_nextgen_tests tests/apk_nextgen_tests.c
 	./$(BUILD_DIR)/tests/apk_nextgen_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/apk_advanced_tests tests/apk_advanced_tests.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/apk_advanced_tests tests/apk_advanced_tests.c
 	./$(BUILD_DIR)/tests/apk_advanced_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/hda_tests tests/hda_tests.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/hda_tests tests/hda_tests.c
 	./$(BUILD_DIR)/tests/hda_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/usb_mass_tests tests/usb_mass_tests.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/usb_mass_tests tests/usb_mass_tests.c
 	./$(BUILD_DIR)/tests/usb_mass_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/wifi_tests tests/wifi_tests.c drivers/net/wifi.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/wifi_tests tests/wifi_tests.c drivers/net/wifi.c
 	./$(BUILD_DIR)/tests/wifi_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/cmdline_tests tests/cmdline_tests.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/cmdline_tests tests/cmdline_tests.c
 	./$(BUILD_DIR)/tests/cmdline_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/exfat_tests tests/exfat_tests.c fs/exfat.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/exfat_tests tests/exfat_tests.c fs/exfat.c
 	./$(BUILD_DIR)/tests/exfat_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/ahci_tests tests/ahci_tests.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/ahci_tests tests/ahci_tests.c
 	./$(BUILD_DIR)/tests/ahci_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/headphone_tests tests/headphone_tests.c drivers/audio/headphone.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/headphone_tests tests/headphone_tests.c drivers/audio/headphone.c
 	./$(BUILD_DIR)/tests/headphone_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/microphone_tests tests/microphone_tests.c drivers/audio/microphone.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/microphone_tests tests/microphone_tests.c drivers/audio/microphone.c
 	./$(BUILD_DIR)/tests/microphone_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/gpu_3d_tests tests/gpu_3d_tests.c drivers/video/gpu_3d.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/gpu_3d_tests tests/gpu_3d_tests.c drivers/video/gpu_3d.c
 	./$(BUILD_DIR)/tests/gpu_3d_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/gpu_hw_drivers_tests tests/gpu_hw_drivers_tests.c drivers/video/intel_i915.c drivers/video/amd_radeon.c drivers/video/nvidia_nouveau.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/gpu_hw_drivers_tests tests/gpu_hw_drivers_tests.c drivers/video/intel_i915.c drivers/video/amd_radeon.c drivers/video/nvidia_nouveau.c
 	./$(BUILD_DIR)/tests/gpu_hw_drivers_tests
-	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/io_uring_tests tests/io_uring_tests.c kernel/io_uring.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/io_uring_tests tests/io_uring_tests.c kernel/io_uring.c
 	./$(BUILD_DIR)/tests/io_uring_tests
 
 OVMF_CODE := /usr/share/edk2/ovmf/OVMF_CODE.fd

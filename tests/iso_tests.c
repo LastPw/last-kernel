@@ -56,7 +56,7 @@ typedef struct {
     u32  mode;
 } vfs_node_info_t;
 
-#include "../include/fs_iso9660.h"
+#include "fs_iso9660.h"
 #include "../fs/iso9660.c"
 
 /* ── image builder helpers ────────────────────────────────────────────── */

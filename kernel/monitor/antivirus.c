@@ -1,4 +1,7 @@
 #include "antivirus.h"
+#include "signature_updater.h"
+#include "io_guard.h"
+#include "kernel_monitor.h"
 #include "ai_security.h"
 #include "threat_logger.h"
 #include "process_monitor.h"
@@ -281,3 +284,109 @@ void antivirus_status(antivirus_status_t* out) {
     }
     *out = st;
 }
+
+/* --- In-Kernel Threat Logger --- */
+#include "spinlock.h"
+#include "kshield.h"
+
+static threat_record_t s_threat_ring[THREAT_LOG_CAP] __attribute__((aligned(64)));
+static u32 s_threat_head = 0;
+static u32 s_threat_next_id = 1;
+static spinlock_t s_threat_lock;
+
+void threat_logger_init(void) {
+    spinlock_init(&s_threat_lock);
+    u32 irqf = spinlock_lock_irqsave(&s_threat_lock);
+    s_threat_head = 0;
+    s_threat_next_id = 1;
+    for (u32 i = 0; i < THREAT_LOG_CAP; i++) {
+        s_threat_ring[i].id = 0;
+        s_threat_ring[i].tick = 0;
+        s_threat_ring[i].task_id = 0;
+        s_threat_ring[i].type = THREAT_NONE;
+        s_threat_ring[i].arg0 = 0;
+        s_threat_ring[i].arg1 = 0;
+    }
+    spinlock_unlock_irqrestore(&s_threat_lock, irqf);
+}
+
+void threat_logger_log(threat_type_t type, u32 task_id, u32 arg0, u32 arg1) {
+    u32 irqf = spinlock_lock_irqsave(&s_threat_lock);
+    u32 idx = s_threat_head % THREAT_LOG_CAP;
+    s_threat_ring[idx].id = s_threat_next_id++;
+    s_threat_ring[idx].tick = timer_ticks();
+    s_threat_ring[idx].task_id = task_id;
+    s_threat_ring[idx].type = (u32)type;
+    s_threat_ring[idx].arg0 = arg0;
+    s_threat_ring[idx].arg1 = arg1;
+    s_threat_head++;
+    spinlock_unlock_irqrestore(&s_threat_lock, irqf);
+    kshield_on_threat(type, task_id, arg0, arg1);
+}
+
+u32 threat_logger_count(void) {
+    u32 irqf = spinlock_lock_irqsave(&s_threat_lock);
+    u32 h = s_threat_head;
+    spinlock_unlock_irqrestore(&s_threat_lock, irqf);
+    return h;
+}
+
+int threat_logger_get(u32 reverse_index, threat_record_t* out) {
+    u32 irqf = spinlock_lock_irqsave(&s_threat_lock);
+    if (!out) {
+        spinlock_unlock_irqrestore(&s_threat_lock, irqf);
+        return -1;
+    }
+    if (s_threat_head == 0 || reverse_index >= THREAT_LOG_CAP || reverse_index >= s_threat_head) {
+        spinlock_unlock_irqrestore(&s_threat_lock, irqf);
+        return -1;
+    }
+    u32 pos = (s_threat_head - 1 - reverse_index) % THREAT_LOG_CAP;
+    if (s_threat_ring[pos].id == 0) {
+        spinlock_unlock_irqrestore(&s_threat_lock, irqf);
+        return -1;
+    }
+    *out = s_threat_ring[pos];
+    spinlock_unlock_irqrestore(&s_threat_lock, irqf);
+    return 0;
+}
+
+/* --- In-Kernel Signature Updater --- */
+#define SIG_BLOB_MAX 256
+static u8 s_sig_blob[SIG_BLOB_MAX];
+
+void signature_updater_init(void) {
+    for (u32 i = 0; i < SIG_BLOB_MAX; i++) s_sig_blob[i] = 0;
+}
+
+int signature_updater_apply(const sig_blob_t* blob) {
+    if (!blob || !blob->data || blob->size > SIG_BLOB_MAX) return -1;
+    return 0;
+}
+
+/* --- In-Kernel IO Guard --- */
+void io_guard_init(void) {}
+void io_guard_on_irq(u8 irq, u32 irq_count) {
+    if (irq > 15) threat_logger_log(THREAT_IRQ_ABUSE, 0, irq, irq_count);
+}
+int io_guard_filter_input(int ch) {
+    if (ch == '\n' || ch == '\b' || ch == '\t' || ch == 3 || ch == 20 || ch == 22) return ch;
+    if (ch == 0x81 || ch == 0x82 || ch == 0x83 || ch == 0x84) return ch;
+    if (ch < 32 || ch > 126) {
+        threat_logger_log(THREAT_IO_MALFORMED, 0, (u32)ch, 0);
+        return -1;
+    }
+    return ch;
+}
+
+/* --- In-Kernel Monitor --- */
+#include "security.h"
+#include "audit.h"
+
+static u32 s_security_score = 100;
+void kernel_monitor_init(void) { s_security_score = 100; }
+void kernel_monitor_tick(void) {
+    u32 v = audit_violation_count();
+    s_security_score = (v > 50) ? 50 : (100 - v);
+}
+u32 kernel_monitor_security_score(void) { return s_security_score; }

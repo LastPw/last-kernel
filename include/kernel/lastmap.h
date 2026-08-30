@@ -3,6 +3,32 @@
 
 #include "types.h"
 
+#define SCAN_TYPE_SYN     1
+#define SCAN_TYPE_CONNECT 2
+#define SCAN_TYPE_UDP     3
+
+#define SCAN_STATE_PENDING  0
+#define SCAN_STATE_SENT     1
+#define SCAN_STATE_OPEN     2
+#define SCAN_STATE_CLOSED   3
+#define SCAN_STATE_FILTERED 4
+
+typedef struct {
+    u32 timeout_ticks;
+    u32 max_retries;
+    u32 inter_probe_delay_ticks;
+} timing_profile_t;
+
+typedef struct {
+    u32 target_ip;
+    u16 port;
+    u8 scan_type;
+    u8 state;
+    u64 timestamp;
+    u32 retries;
+    u8 response_flags;
+} scan_entry_t;
+
 typedef struct {
     u32 target_ip;
     u16 port_start;

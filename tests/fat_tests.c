@@ -55,7 +55,7 @@ typedef struct {
     u32  mode;
 } vfs_node_info_t;
 
-#include "../include/fs_fat.h"
+#include "fs_fat.h"
 #include "../fs/fat.c"
 
 #define IMG_SECTORS 16384u   /* 8 MB -> FAT16, 1 sector/cluster */
