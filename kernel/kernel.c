@@ -7,6 +7,8 @@
 #include "serial.h"
 #include "userdb.h"
 
+#include "apk.h"
+
 void stack_protector_init(void);
 
 void kmain(void) {
@@ -21,13 +23,15 @@ void kmain(void) {
        - Network Stack (Ethernet, IPv4/IPv6, TCP, UDP, DHCP, DNS, WireGuard, e1000e, RTL8169)
        - Drivers (Keyboard, Mouse, Touchpad, Printer, Serial, Framebuffer, AC97 Audio)
        - Preemptive Multicore Scheduler & POSIX/Linux Syscall Interface
+       - Adaptive Polymorphic Kernel Subsystem (APK)
     */
     core_init();
     userdb_init();
+    apk_init();
 
     serial_writeln("=================================================");
-    serial_writeln("  LastKernel — Standalone Pure 64-Bit Monolith   ");
-    serial_writeln("  Architecture: x86_64 SMP (Preemptive Kernel)   ");
+    serial_writeln("  LastKernel — Adaptive Polymorphic Architecture ");
+    serial_writeln("  Architecture: x86_64 SMP (Preemptive APK)      ");
     serial_writeln("=================================================");
 
     serial_writeln("[LastKernel] Starting kernel diagnostic & debug console...");

@@ -16,6 +16,7 @@ void selftest_init(void);
 int selftest_run_full(selftest_result_t* out);
 int selftest_run_stress(u32 loops, selftest_result_t* out);
 int selftest_run_fuzz(u32 rounds, selftest_result_t* out);
+int selftest_run_linux_abi(selftest_result_t* out);
 void selftest_status(selftest_result_t* out);
 
 #endif

@@ -31,3 +31,30 @@ u32 tcp_backoff_rto(u32 rto_ticks) {
     if (rto_ticks > TCP_RTO_MAX_TICKS) return TCP_RTO_MAX_TICKS;
     return rto_ticks;
 }
+
+void tcp_on_ack(u32* cwnd, u32 ssthresh, u32 mss) {
+    if (!cwnd) return;
+    if (mss == 0u) mss = TCP_DEFAULT_MSS;
+
+    /* Slow Start: Exponential growth until ssthresh */
+    if (*cwnd < ssthresh) {
+        *cwnd += mss;
+    } else {
+        /* Congestion Avoidance: Linear AIMD growth (1 MSS per RTT) */
+        u32 inc = (mss * mss) / (*cwnd > 0 ? *cwnd : 1);
+        if (inc == 0u) inc = 1u;
+        *cwnd += inc;
+    }
+
+    if (*cwnd > TCP_MAX_CWND) *cwnd = TCP_MAX_CWND;
+}
+
+void tcp_on_loss(u32* cwnd, u32* ssthresh, u32 mss) {
+    if (!cwnd || !ssthresh) return;
+    if (mss == 0u) mss = TCP_DEFAULT_MSS;
+
+    /* Fast Retransmit / Multiplicative Decrease (halve window) */
+    *ssthresh = *cwnd / 2u;
+    if (*ssthresh < 2u * mss) *ssthresh = 2u * mss;
+    *cwnd = *ssthresh;
+}

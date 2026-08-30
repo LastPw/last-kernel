@@ -64,6 +64,10 @@
 #include "ai_security.h"
 #include "pcspeaker.h"
 #include "ac97.h"
+#include "hda.h"
+#include "sound.h"
+#include "wifi.h"
+#include "cmdline.h"
 #include "rtl8169.h"
 
 #include "touchpad.h"
@@ -848,16 +852,22 @@ static int kmod_services(void) {
     rtl8169_init();
     ahci_init();
     ide_init();
-    ac97_init();
+    sound_init();
     /* Auto-boot-chirp disabled: PCI detection of the AC'97 device is
        currently flaky across boots and the post-playback path needs
        stabilisation. Use the 'audio beep/test' shell commands instead. */
-    vbe_init(0, 0, 0, 0, 0);
+    {
+        u64 fb_phys = g_boot_framebuffer_phys;
+        u64 fb_virt = fb_phys ? (fb_phys + g_hhdm_offset) : 0;
+        vbe_init(fb_phys, (u32)g_boot_framebuffer_w, (u32)g_boot_framebuffer_h, (u32)g_boot_framebuffer_pitch, (u16)g_boot_framebuffer_bpp);
+        gfx_set_boot_framebuffer(fb_phys, fb_virt, (u32)g_boot_framebuffer_w, (u32)g_boot_framebuffer_h, (u32)g_boot_framebuffer_pitch, (u16)g_boot_framebuffer_bpp);
+    }
     virtio_gpu_init();
     gpu_drm_init();
     display_mst_init();
 
     nic_init();
+    wifi_init();
     /* IPv6 link-local and NDP state depend on the NIC MAC being ready. */
     netstack_init();
     serial_write("[LastOS] NIC RTL8139 ready=");
@@ -1276,7 +1286,7 @@ static void page_fault_handler(registers_t* regs) {
 void core_init(void) {
     serial_init();
     if (bootinfo_validate() != 0) {
-        serial_writeln("[LastOS] fatal: no limine boot contract");
+        serial_writeln("[LastKernel] fatal: invalid Multiboot2 boot contract");
         for (;;) { __asm__ __volatile__("cli; hlt"); }
     }
     /* Limine (base revision >= 1) clears the identity map, so the legacy
@@ -1475,6 +1485,14 @@ u32 ksyscall(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3) {
     return syscall_dispatch(nr, a0, a1, a2, a3, scheduler_current_task());
 }
 
+static inline void x86_stac(void) {
+    __asm__ __volatile__(".byte 0x0f, 0x01, 0xcb" : : : "cc");
+}
+
+static inline void x86_clac(void) {
+    __asm__ __volatile__(".byte 0x0f, 0x01, 0xca" : : : "cc");
+}
+
 int kcopy_from_user(void* dst, u64 user_src, u32 len) {
     if (!dst || len == 0u) {
         return -1;
@@ -1501,9 +1519,11 @@ int kcopy_from_user(void* dst, u64 user_src, u32 len) {
     }
     u8* d = (u8*)dst;
     const u8* s = (const u8*)user_src;
+    x86_stac();
     for (u32 i = 0; i < len; i++) {
         d[i] = s[i];
     }
+    x86_clac();
     if (user_space != 0u && prev_space != user_space) {
         (void)paging_space_switch(prev_space);
     }
@@ -1541,9 +1561,11 @@ int kcopy_to_user(u64 user_dst, const void* src, u32 len) {
     }
     const u8* s = (const u8*)src;
     u8* d = (u8*)user_dst;
+    x86_stac();
     for (u32 i = 0; i < len; i++) {
         d[i] = s[i];
     }
+    x86_clac();
     if (user_space != 0u && prev_space != user_space) {
         (void)paging_space_switch(prev_space);
     }

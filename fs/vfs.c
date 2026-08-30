@@ -4,6 +4,7 @@
 #include "string.h"
 #include "timer.h"
 #include "rust_bridge.h"
+#include "embedded_apps.h"
 
 #define VFS_NAME_TOKEN 32u
 #define VFS_PATH_TOKENS 16u
@@ -444,6 +445,24 @@ void vfs_init(void) {
         g_nodes[r].mode = 0755u;
         set_name(g_nodes[r].name, "/");
         cache_put_node_path("/", &g_nodes[r]);
+
+        /* Populate initial userland /bin applications */
+        (void)vfs_mkdir("/bin");
+        (void)vfs_create_file("/bin/uname");
+        (void)vfs_write_file("/bin/uname", (const char*)BIN_UNAME_DATA, BIN_UNAME_LEN);
+        (void)vfs_create_file("/bin/calc");
+        (void)vfs_write_file("/bin/calc", (const char*)BIN_CALC_DATA, BIN_CALC_LEN);
+        (void)vfs_create_file("/bin/cat");
+        (void)vfs_write_file("/bin/cat", (const char*)BIN_CAT_DATA, BIN_CAT_LEN);
+        (void)vfs_create_file("/bin/sh");
+        (void)vfs_write_file("/bin/sh", (const char*)BIN_SH_DATA, BIN_SH_LEN);
+
+        /* Populate initial /etc configuration files */
+        (void)vfs_mkdir("/etc");
+        (void)vfs_create_file("/etc/hostname");
+        (void)vfs_write_file("/etc/hostname", "lastos\n", 7u);
+        (void)vfs_create_file("/etc/os-release");
+        (void)vfs_write_file("/etc/os-release", "NAME=\"LastOS\"\nVERSION=\"0.2.0\"\nID=lastos\nARCH=x86_64\n", 53u);
     }
 }
 

@@ -1,5 +1,6 @@
 #include "gfx.h"
 #include "frame_allocator.h"
+#include "bootinfo.h"
 
 static u32 s_bb_w = 0u, s_bb_h = 0u;
 static int gfx_backbuffers_alloc(u32 w, u32 h);
@@ -133,22 +134,13 @@ static int gfx_framebuffer_size(u32 width, u32 height, u32 bytespp, u32 pitch,
 static int gfx_enable_bga_mode(u16 w, u16 h, u16 bpp) {
     u32 bytespp;
     u32 pitch;
-    u32 fb_start;
-    u32 fb_bytes;
-    u32 map_bytes;
     if (w < 640u || h < 480u || w > 1920u || h > 1200u || bpp != 32u) return -1;
     if (pci_enable_vga_lfb() != 0) { serial_writeln("[gfx] bga: pci_enable_vga_lfb failed"); return -1; }
     if (bga_try_enable(w, h, bpp) != 0) { serial_writeln("[gfx] bga: bga_try_enable failed"); return -1; }
     bytespp = 4u;
     pitch = (u32)w * bytespp;
-    fb_start = BGA_LFB_VIRT & 0xFFFFF000u;
-    fb_bytes = pitch * (u32)h;
-    if (gfx_framebuffer_size(w, h, bytespp, pitch, BGA_LFB_VIRT, &fb_start, &fb_bytes) != 0) { serial_writeln("[gfx] bga: fb_size failed"); return -1; }
-    map_bytes = (fb_bytes + 0x0FFFu) & 0xFFFFF000u;
-    if (map_bytes < fb_bytes) { serial_writeln("[gfx] bga: map overflow"); return -1; }
-    if (paging_map_range(fb_start, bga_lfb_phys, map_bytes, PAGE_FLAG_RW) != 0) { serial_writeln("[gfx] bga: map_range failed"); return -1; }
-    fb32 = (u32*)BGA_LFB_VIRT;
-    fb8 = (u8*)BGA_LFB_VIRT;
+    fb32 = (u32*)(uintptr_t)(g_hhdm_offset + bga_lfb_phys);
+    fb8 = (u8*)(uintptr_t)(g_hhdm_offset + bga_lfb_phys);
     phys_w = w; phys_h = h; use_vbe = 1u; vbe_bytespp = (u8)bytespp; vbe_bpp = (u8)bpp;
     fb_pitch_bytes = pitch; in_graphics = 1;
     gfx_clear(1u);
@@ -636,7 +628,9 @@ static u8 order_for(u32 pages) {
 
 static int gfx_backbuffers_ensure(void) {
     if (s_backbuffer) return 0;
-    return gfx_backbuffers_alloc(s_bb_w, s_bb_h);
+    u32 w = s_bb_w ? s_bb_w : (phys_w ? phys_w : 1024u);
+    u32 h = s_bb_h ? s_bb_h : (phys_h ? phys_h : 768u);
+    return gfx_backbuffers_alloc(w, h);
 }
 
 static int gfx_backbuffers_alloc(u32 w, u32 h) {
@@ -645,10 +639,9 @@ static int gfx_backbuffers_alloc(u32 w, u32 h) {
     if (h > MAX_GFX_H) h = MAX_GFX_H;
     if (s_backbuffer && s_bb_w == w && s_bb_h == h) return 0;
     u32 pages = ((u64)w * h * (sizeof(u32) + sizeof(rgba64_t)) + 4095u) / 4096u;
-    void* block = frame_alloc_dma32_order(order_for(pages));
+    void* block = frame_alloc_order(order_for(pages));
     if (!block) return -1;
-    void* kva = (void*)paging_phys_to_virt((u64)(uintptr_t)block);
-    u32* nb = (u32*)kva;
+    u32* nb = (u32*)block;
     s_hdr_backbuffer = (rgba64_t*)(nb + (u64)w * h);
     s_backbuffer = nb;
     s_bb_w = w;
@@ -927,7 +920,7 @@ void gfx_present(void) {
         return;
     }
 
-    if (use_vbe && vbe_bytespp == 4u && fb32) {
+    if (use_vbe && vbe_bytespp == 4u && fb32 && s_backbuffer) {
         if (fb_pitch_bytes == (phys_w * 4u)) {
             u64* dst64 = (u64*)fb8;
             const u64* src64 = (const u64*)s_backbuffer;
@@ -1165,13 +1158,14 @@ void gfx_px_blend(u32 x, u32 y, u32 color, u8 alpha) {
 
 void gfx_clear(u32 color) {
     if (!in_graphics) return;
+    if (gfx_backbuffers_ensure() != 0 || !s_backbuffer) return;
     u32 cc = color_index_to_rgb(color);
     rgba64_t c64 = gfx_rgb_to_rgba64(color, 255u);
     u32 total = phys_w * phys_h;
     if (total > MAX_GFX_W * MAX_GFX_H) total = MAX_GFX_W * MAX_GFX_H;
     for (u32 i = 0; i < total; i++) {
         s_backbuffer[i] = cc;
-        s_hdr_backbuffer[i] = c64;
+        if (s_hdr_backbuffer) s_hdr_backbuffer[i] = c64;
     }
 }
 

@@ -86,6 +86,11 @@ static inline void* pfn_to_va(u32 idx) {
 
 static inline u32 va_to_pfn(const void* frame) {
     u64 pa = (u64)(uintptr_t)frame;
+    if (g_hhdm_offset != 0ull && pa >= g_hhdm_offset) {
+        pa -= g_hhdm_offset;
+    } else if (pa >= 0xFFFFFFFF80000000ull) {
+        pa -= 0xFFFFFFFF80000000ull;
+    }
     if (pa < g_first_pa) return INVALID_IDX;
     return (u32)((pa - g_first_pa) / FRAME_SIZE);
 }
@@ -221,10 +226,14 @@ void frame_allocator_init(u64 ram_bytes) {
         tmp[j] = key;
     }
 
-    /* 2) Metadata sizing. */
-    u64 raw_frames = 0u;
-    for (u32 r = 0; r < ntmp; r++) raw_frames += tmp[r].len / FRAME_SIZE;
-    u32 frames = (u32)(raw_frames > (u32)-1 ? (u32)-1 : raw_frames);
+    /* 2) Metadata sizing: must cover the full span from first_pa to max_pa */
+    u64 span_frames = 0u;
+    if (ntmp > 0u) {
+        u64 min_pa = tmp[0].base_pa;
+        u64 max_pa = tmp[ntmp - 1u].base_pa + tmp[ntmp - 1u].len;
+        span_frames = (max_pa - min_pa) / FRAME_SIZE;
+    }
+    u32 frames = (u32)(span_frames > (u32)-1 ? (u32)-1 : span_frames);
     u64 meta_bytes = ((u64)frames * FA_META_PER_FRAME + FRAME_SIZE - 1ull)
                      & ~(u64)(FRAME_SIZE - 1ull);
 
@@ -469,7 +478,48 @@ void* frame_alloc_dma32_order(u8 order) {
     return alloc_from(order, 1);
 }
 
+/* ── Per-CPU Lockless Frame Magazines (O(1) allocation without spinlock contention) ── */
+#define FA_PER_CPU_MAGAZINE_CAPACITY 64u
+#define FA_MAX_CPUS 64u
+
+typedef struct {
+    u32 count;
+    void* frames[FA_PER_CPU_MAGAZINE_CAPACITY];
+} per_cpu_magazine_t;
+
+static per_cpu_magazine_t g_cpu_magazines[FA_MAX_CPUS];
+
+static inline u32 get_current_cpu_id(void) {
+    u32 a = 1, b = 0, c = 0, d = 0;
+    __asm__ __volatile__("cpuid" : "+a"(a), "=b"(b), "=c"(c), "=d"(d) : "c"(0));
+    return (b >> 24) & 0x3Fu;
+}
+
 void* frame_alloc(void) {
+    u32 cpu = get_current_cpu_id();
+    if (cpu >= FA_MAX_CPUS) cpu = 0;
+    per_cpu_magazine_t* mag = &g_cpu_magazines[cpu];
+
+    /* Fast path: pop from local lockless magazine */
+    if (mag->count > 0) {
+        mag->count--;
+        return mag->frames[mag->count];
+    }
+
+    /* Slow path: batch refill 32 frames under a single spinlock acquisition */
+    u32 flags = spinlock_lock_irqsave(&g_frame_lock);
+    for (u32 i = 0; i < 32u; i++) {
+        void* f = alloc_from(0u, 0);
+        if (!f) break;
+        mag->frames[mag->count++] = f;
+    }
+    spinlock_unlock_irqrestore(&g_frame_lock, flags);
+
+    if (mag->count > 0) {
+        mag->count--;
+        return mag->frames[mag->count];
+    }
+
     return frame_alloc_order(0u);
 }
 
@@ -523,6 +573,19 @@ void frame_free_order(void* frame, u8 order_hint) {
 }
 
 void frame_free(void* frame) {
+    if (!frame) return;
+    u32 idx = va_to_pfn(frame);
+    if (idx < total_frames_count && region_of(idx) != 0) {
+        u32 cpu = get_current_cpu_id();
+        if (cpu >= FA_MAX_CPUS) cpu = 0;
+        per_cpu_magazine_t* mag = &g_cpu_magazines[cpu];
+        if (frame_refcount[idx] == 1u && block_order[idx] == 0u) {
+            if (mag->count < FA_PER_CPU_MAGAZINE_CAPACITY) {
+                mag->frames[mag->count++] = frame;
+                return;
+            }
+        }
+    }
     frame_free_order(frame, 0u);
 }
 

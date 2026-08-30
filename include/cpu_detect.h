@@ -19,6 +19,12 @@ typedef struct {
     u8 has_apic;
     u8 has_sse;
     u8 has_avx;
+    u8 has_avx2;
+    u8 has_avx512f;
+    u8 has_xsave;
+    u8 has_xsaveopt;
+    u8 has_amx_tile;
+    u8 has_turbo;
     u8 has_long_mode;
     u8 has_nx;
     u8 has_smep;
@@ -28,9 +34,14 @@ typedef struct {
     u8 has_power_mgmt;
     u8 has_tsc_deadline;
     u8 is_modern_profile;
+    u32 xsave_size;
 } cpu_info_t;
 
 void cpu_detect_init(void);
 const cpu_info_t* cpu_get_info(void);
+void cpu_enable_xsave_avx(void);
+void cpu_enable_turbo_boost(void);
+void cpu_enable_syscall_extension(void);
+u32 cpu_get_xsave_size(void);
 
 #endif

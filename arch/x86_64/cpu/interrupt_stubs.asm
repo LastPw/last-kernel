@@ -214,3 +214,43 @@ IRQ 12, 44
 IRQ 13, 45
 IRQ 14, 46
 IRQ 15, 47
+
+global x86_64_syscall_entry
+extern x86_64_syscall_handler
+
+x86_64_syscall_entry:
+    ; Hardware 'syscall' saves user RIP in RCX and user RFLAGS in R11
+    push rcx
+    push r11
+    push rbp
+    push r15
+    push r14
+    push r13
+    push r12
+    push rbx
+
+    ; Prepare args for x86_64_syscall_handler(nr, a1, a2, a3, a4, a5, a6):
+    ; Inbound from user: nr=RAX, a1=RDI, a2=RSI, a3=RDX, a4=R10, a5=R8, a6=R9
+    push r9        ; 7th argument (a6)
+    mov r9, r8     ; 6th argument (a5)
+    mov r8, r10    ; 5th argument (a4)
+    mov rcx, rdx   ; 4th argument (a3)
+    mov rdx, rsi   ; 3rd argument (a2)
+    mov rsi, rdi   ; 2nd argument (a1)
+    mov rdi, rax   ; 1st argument (nr)
+
+    call x86_64_syscall_handler
+    add rsp, 8     ; drop 7th argument
+
+    ; Return value in RAX
+    pop rbx
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+    pop rbp
+    pop r11
+    pop rcx
+
+    ; Fast return to Ring 3 (64-bit operand size for SYSRET)
+    o64 sysret

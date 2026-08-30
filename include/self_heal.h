@@ -19,7 +19,7 @@ typedef struct {
     u64 cr3;
     u32 tick;
     u8  valid;
-    u8  fxsave_area[512] __attribute__((aligned(16)));
+    u8  fxsave_area[2688] __attribute__((aligned(64)));
     u64 shadow_stack_va;
     u8  shadow_stack_data[KSHIELD_SHADOW_PAGE_SIZE];
     u8  shadow_has_memory;

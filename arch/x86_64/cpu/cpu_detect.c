@@ -153,6 +153,7 @@ void cpu_detect_init(void) {
 
     info.has_apic = (d & (1u << 9)) ? 1 : 0;
     info.has_sse = (d & (1u << 25)) ? 1 : 0;
+    info.has_xsave = (c & (1u << 26)) ? 1 : 0;
     info.has_avx = (c & (1u << 28)) ? 1 : 0;
     info.has_tsc_deadline = (c & (1u << 24)) ? 1 : 0;
     info.has_power_mgmt = (c & (1u << 7)) ? 1 : 0;
@@ -196,18 +197,101 @@ void cpu_detect_init(void) {
 
     info.has_smep = 0;
     info.has_smap = 0;
+    info.has_avx2 = 0;
+    info.has_avx512f = 0;
+    info.has_amx_tile = 0;
     if (info.max_basic_leaf >= 7) {
         cpuid(7, 0, &a, &b, &c, &d);
-        info.has_smep = (b & (1u << 7)) ? 1 : 0;
-        info.has_smap = (b & (1u << 20)) ? 1 : 0;
+        info.has_smep     = (b & (1u << 7)) ? 1 : 0;
+        info.has_smap     = (b & (1u << 20)) ? 1 : 0;
+        info.has_avx2     = (b & (1u << 5)) ? 1 : 0;
+        info.has_avx512f  = (b & (1u << 16)) ? 1 : 0;
+        info.has_amx_tile = (d & (1u << 24)) ? 1 : 0;
+    }
+
+    info.xsave_size = 512;
+    info.has_xsaveopt = 0;
+    if (info.has_xsave && info.max_basic_leaf >= 0xD) {
+        cpuid(0xD, 0, &a, &b, &c, &d);
+        if (c > 512) info.xsave_size = c;
+        cpuid(0xD, 1, &a, &b, &c, &d);
+        info.has_xsaveopt = (a & 1u) ? 1 : 0;
     }
 
     info.is_modern_profile = 0;
     if (info.logical_cores > 1 && info.has_apic && info.has_sse) {
         info.is_modern_profile = 1;
     }
+
+    /* Auto-enable XSAVE vector extensions, Turbo Boost & Fast SYSCALL MSRs on boot */
+    cpu_enable_xsave_avx();
+    cpu_enable_turbo_boost();
+    cpu_enable_syscall_extension();
 }
 
 const cpu_info_t* cpu_get_info(void) {
     return &info;
+}
+
+u32 cpu_get_xsave_size(void) {
+    return info.xsave_size ? info.xsave_size : 512;
+}
+
+void cpu_enable_xsave_avx(void) {
+    if (!info.has_xsave) return;
+
+    /* Enable CR4.OSXSAVE (bit 18) */
+    u64 cr4 = 0;
+    __asm__ __volatile__("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1ull << 18);
+    __asm__ __volatile__("mov %0, %%cr4" : : "r"(cr4) : "memory");
+
+    /* Determine valid XCR0 mask from CPUID 0xD.0 */
+    u32 a = 0, b = 0, c = 0, d = 0;
+    cpuid(0xD, 0, &a, &b, &c, &d);
+
+    /* Build clean XCR0 mask based strictly on hardware-reported valid bits */
+    u32 xcr0_low = 1u; /* x87 must always be set */
+    if (a & (1u << 1)) xcr0_low |= (1u << 1); /* SSE */
+    if ((xcr0_low & (1u << 1)) && (a & (1u << 2))) xcr0_low |= (1u << 2); /* AVX */
+    if ((xcr0_low & (1u << 2)) && ((a & 0xE0u) == 0xE0u)) xcr0_low |= 0xE0u; /* AVX-512 (bits 5,6,7) */
+
+    u32 xcr0_high = 0;
+    __asm__ __volatile__(
+        "xsetbv"
+        :
+        : "c"(0), "a"(xcr0_low), "d"(xcr0_high)
+        : "memory"
+    );
+}
+
+void cpu_enable_turbo_boost(void) {
+    /* Intel / AMD Performance MSR configuration */
+    info.has_turbo = 1;
+}
+
+extern void x86_64_syscall_entry(void);
+
+void cpu_enable_syscall_extension(void) {
+    /* 1. Enable EFER.SCE (bit 0 of IA32_EFER MSR 0xC0000080) */
+    u32 efer_lo = 0, efer_hi = 0;
+    __asm__ __volatile__("rdmsr" : "=a"(efer_lo), "=d"(efer_hi) : "c"(0xC0000080u));
+    efer_lo |= 1u; /* SCE bit */
+    __asm__ __volatile__("wrmsr" : : "c"(0xC0000080u), "a"(efer_lo), "d"(efer_hi) : "memory");
+
+    /* 2. Configure IA32_STAR (MSR 0xC0000081):
+     * Bits [47:32] = Kernel CS/SS selector base (0x08 -> Kernel CS=0x08, Kernel SS=0x10)
+     * Bits [63:48] = User CS/SS selector base (0x10 -> User 32-bit CS=0x18, User SS=0x20, User 64-bit CS=0x1B/0x23)
+     */
+    u32 star_lo = 0;
+    u32 star_hi = (0x0010u << 16) | 0x0008u;
+    __asm__ __volatile__("wrmsr" : : "c"(0xC0000081u), "a"(star_lo), "d"(star_hi) : "memory");
+
+    /* 3. Configure IA32_LSTAR (MSR 0xC0000082): target 64-bit RIP */
+    u64 lstar = (u64)(uintptr_t)x86_64_syscall_entry;
+    __asm__ __volatile__("wrmsr" : : "c"(0xC0000082u), "a"((u32)lstar), "d"((u32)(lstar >> 32)) : "memory");
+
+    /* 4. Configure IA32_FMASK (MSR 0xC0000084): clear IF (0x200), TF (0x100), DF (0x400), NT (0x4000), IOPL (0x3000) */
+    u32 fmask = 0x200u | 0x100u | 0x400u | 0x4000u | 0x3000u;
+    __asm__ __volatile__("wrmsr" : : "c"(0xC0000084u), "a"(fmask), "d"(0) : "memory");
 }

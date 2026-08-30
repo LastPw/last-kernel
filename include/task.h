@@ -57,7 +57,7 @@ typedef struct task_struct {
     void*           kernel_stack;     /* Base pointer of 16KB kernel stack */
     void*           kernel_stack_top; /* Top pointer (RSP0) of 16KB stack */
     void*           user_stack;       /* Ring-3 user stack pointer */
-    u8              fxsave_area[512] __attribute__((aligned(16)));
+    u8              fxsave_area[2688] __attribute__((aligned(64)));
 
     /* Memory Management */
     u32             address_space;    /* CR3 page table space / ID */

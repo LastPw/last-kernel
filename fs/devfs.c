@@ -3,6 +3,8 @@
 #include "serial.h"
 #include "screen.h"
 #include "keyboard.h"
+#include "mouse.h"
+#include "vbe.h"
 #include "entropy.h"
 #include "disk.h"
 
@@ -202,6 +204,94 @@ static const file_operations_t s_sda_fops = {
     .poll = 0
 };
 
+/* ── /dev/fb0 (Linear Framebuffer Hardware Abstraction) ── */
+#define FBIOGET_VSCREENINFO 0x4600
+
+typedef struct {
+    u32 width;
+    u32 height;
+    u32 pitch;
+    u32 bpp;
+    u64 fb_addr;
+} fb_info_t;
+
+static i32 fb0_read(void* priv, char* buf, u32 count, u64 offset) {
+    (void)priv;
+    const vbe_info_t* info = vbe_get_info();
+    if (!info || !info->framebuffer_addr) return 0;
+    u64 total_bytes = (u64)info->pitch * info->height;
+    if (offset >= total_bytes) return 0;
+    if (offset + count > total_bytes) count = (u32)(total_bytes - offset);
+    memcpy(buf, (const void*)(uintptr_t)(info->framebuffer_addr + offset), count);
+    return (i32)count;
+}
+
+static i32 fb0_write(void* priv, const char* buf, u32 count, u64 offset) {
+    (void)priv;
+    const vbe_info_t* info = vbe_get_info();
+    if (!info || !info->framebuffer_addr) return 0;
+    u64 total_bytes = (u64)info->pitch * info->height;
+    if (offset >= total_bytes) return 0;
+    if (offset + count > total_bytes) count = (u32)(total_bytes - offset);
+    memcpy((void*)(uintptr_t)(info->framebuffer_addr + offset), buf, count);
+    return (i32)count;
+}
+
+static int fb0_ioctl(void* priv, u32 cmd, u64 arg) {
+    (void)priv;
+    const vbe_info_t* info = vbe_get_info();
+    if (!info) return -1;
+    if (cmd == FBIOGET_VSCREENINFO && arg) {
+        fb_info_t* out = (fb_info_t*)(uintptr_t)arg;
+        out->width   = info->width;
+        out->height  = info->height;
+        out->pitch   = info->pitch;
+        out->bpp     = info->bpp;
+        out->fb_addr = info->framebuffer_addr;
+        return 0;
+    }
+    return -1;
+}
+
+static const file_operations_t s_fb0_fops = {
+    .open = 0,
+    .read = fb0_read,
+    .write = fb0_write,
+    .ioctl = fb0_ioctl,
+    .close = 0,
+    .poll = 0
+};
+
+/* ── /dev/mouse (Standard Input Mouse Event Device) ── */
+typedef struct {
+    i32 dx;
+    i32 dy;
+    u8  buttons;
+} dev_mouse_event_t;
+
+static i32 mouse_read(void* priv, char* buf, u32 count, u64 offset) {
+    (void)priv; (void)offset;
+    if (!buf || count < sizeof(dev_mouse_event_t)) return 0;
+    mouse_poll();
+    mouse_state_t ms;
+    mouse_state(&ms);
+    dev_mouse_event_t evt;
+    evt.dx = ms.dx;
+    evt.dy = ms.dy;
+    evt.buttons = ms.buttons;
+    memcpy(buf, &evt, sizeof(evt));
+    return (i32)sizeof(evt);
+}
+
+static const file_operations_t s_mouse_fops = {
+    .open = 0,
+    .read = mouse_read,
+    .write = 0,
+    .ioctl = 0,
+    .close = 0,
+    .poll = 0
+};
+
 /* ═══════════════════════════════════════════════════════════════════════
  *  DevFS Core Subsystem
  * ═══════════════════════════════════════════════════════════════════════ */
@@ -222,8 +312,10 @@ void devfs_init(void) {
     devfs_register_device("console", DEV_TYPE_CHAR,  &s_tty_fops,    0);
     devfs_register_device("ttyS0",   DEV_TYPE_CHAR,  &s_serial_fops, 0);
     devfs_register_device("sda",     DEV_TYPE_BLOCK, &s_sda_fops,    0);
+    devfs_register_device("fb0",     DEV_TYPE_CHAR,  &s_fb0_fops,    0);
+    devfs_register_device("mouse",   DEV_TYPE_CHAR,  &s_mouse_fops,  0);
 
-    serial_writeln("[DevFS] Monolithic /dev filesystem initialized with 8 standard nodes");
+    serial_writeln("[DevFS] Monolithic /dev filesystem initialized (fb0, mouse, tty, sda active)");
 }
 
 int devfs_register_device(const char* name, u8 dev_type, const file_operations_t* fops, void* priv) {

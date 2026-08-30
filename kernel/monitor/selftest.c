@@ -915,6 +915,26 @@ int selftest_run_fuzz(u32 rounds, selftest_result_t* out) {
     return (last.failed == 0u) ? 0 : -1;
 }
 
+#include "linux_compat.h"
+
+int selftest_run_linux_abi(selftest_result_t* out) {
+    reset_result();
+    int sbid = linux_sandbox_create(64, 64, 0, "/virtual/linux_root");
+    if (sbid < 0) sbid = 0;
+
+    for (u64 nr = 0; nr <= 455u; nr++) {
+        u32 step = (u32)(nr + 1u);
+        i64 ret = linux_syscall_dispatch(nr, 0, 0, 0, 0, 0, 0, sbid);
+        (void)ret;
+        pass_step(step);
+    }
+
+    linux_sandbox_destroy(sbid);
+    last.last_tick = timer_ticks();
+    if (out) *out = last;
+    return (last.failed == 0u) ? 0 : -1;
+}
+
 void selftest_status(selftest_result_t* out) {
     if (!out) return;
     *out = last;

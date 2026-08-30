@@ -93,9 +93,14 @@ void security_init(const cpu_info_t* cpu) {
     }
     if (cpu->has_smap) {
         prof.smap_active = 1;
-        /* SMAP requires IA-32e (long mode) and is not available in 32-bit
-         * protected mode.  The flag is stored for informational/reporting
-         * purposes; actual SMAP enforcement requires a 64-bit kernel. */
+        /* Enable SMAP in CR4: prevents ring-0 data access to ring-3 pages
+         * unless explicitly unlocked via STAC/CLAC. Bit 21 = CR4.SMAP. */
+        __asm__ __volatile__(
+            "mov %%cr4, %%rax\n"
+            "or $0x00200000, %%rax\n"   /* Set bit 21 (SMAP) */
+            "mov %%rax, %%cr4\n"
+            : : : "rax", "memory"
+        );
     }
 
     if (!cpu->has_cpuid) {

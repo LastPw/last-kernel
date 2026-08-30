@@ -1,5 +1,22 @@
+# Build directories
 build/
-*.iso
-*.elf
+user/build/
+bootloader/pulse/build/
+rust_kernel/target/
+bin/
+
+# Compiled objects, binaries & disk images
 *.o
 *.a
+*.d
+*.elf
+*.bin
+*.iso
+*.img
+*.tmp
+
+# Editor & System metadata
+.DS_Store
+*~
+*.swp
+*.lock

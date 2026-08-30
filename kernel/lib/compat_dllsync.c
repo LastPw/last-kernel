@@ -2,7 +2,7 @@
 #include "compat_bridge.h"
 #include "timer.h"
 
-#define DS_MAX_TASKS 4096u
+#define DS_MAX_TASKS 128u
 #define DS_MAX_MODULES 8u
 #define DS_BITMAP_WORDS 8u
 #define DS_WINDOW 48u

@@ -6,28 +6,11 @@ PHDRS {
 }
 
 SECTIONS {
-    /* Kernel virtual base in the higher half (-mcmodel=kernel).  The classic
-       -2GiB anchor (0xffffffff80000000) is in the kernel model's ±2GiB
-       range and stays clear of Limine's default HHDM offset (0xffff800000000000).
-       Limine ignores p_paddr and picks its own physical base; the
-       kernel_address + hhdm responses carry the load geometry.  The whole
-       memsz of every PT_LOAD (including .bss and the .heap reserve below)
-       is physically backed by Limine and zeroed before _start runs. */
-    . = 0xFFFFFFFF80000000;
+    . = 0x200000;
 
     .text : {
+        KEEP(*(.mb2hdr))
         *(.text .text.*)
-    } :text
-
-    /* Limine protocol requests must be kept so the bootloader can discover
-       them (some toolchains garbage-collect unused sections). */
-    .limine_reqs : {
-        KEEP(*(.limine_reqs))
-    } :text
-
-    /* Marked section for the base-revision tag emitted by LIMINE_BASE_REVISION_TAG. */
-    .limine_revision : {
-        KEEP(*(.limine_revision))
     } :text
 
     .rodata : {
@@ -35,9 +18,6 @@ SECTIONS {
         *(.gnu.linkonce.r.*)
     } :text
 
-    /* Each PT_LOAD must start on a fresh page: if two loads with different
-       permission flags share a page, Limine refuses to load the image
-       ("PHDRs with different permissions sharing the same memory page"). */
     . = ALIGN(4096);
     .data : {
         *(.data .data.*)
@@ -45,14 +25,6 @@ SECTIONS {
     } :data
 
     __kernel_end = .;
-
-    /* Embed the Limine UEFI loader for the P5 installer's EFI system
-       partition.  Must be placed before the .bss reserve or the location
-       counter would wrap back below the kernel base. */
-    . = ALIGN(4096);
-    .limine_efi_blob : {
-        *(.limine_efi_blob)
-    } :data
 
     . = ALIGN(4096);
     __bss_start = .;
@@ -63,14 +35,10 @@ SECTIONS {
     } :data
     __bss_end = .;
 
-    /* Kernel heap backing.  Lives in the zeroed, Limine-backed image tail so
-       no frames have to be carved out of the frame allocator for it.
-       16 MiB covers observed kmalloc peak with headroom; large buffers are
-       frame-allocated on demand instead. */
     . = ALIGN(4096);
     __heap_start = .;
     .heap (NOLOAD) : {
-        . = . + 16 * 1024 * 1024;
+        . = . + 8 * 1024 * 1024;
     } :data
     __heap_end = .;
 
@@ -78,5 +46,8 @@ SECTIONS {
         *(.eh_frame)
         *(.comment)
         *(.note*)
+        *(.limine_reqs)
+        *(.limine_revision)
+        *(.limine_efi_blob)
     }
 }

@@ -259,6 +259,7 @@ void interrupts_init(void) {
 }
 
 #include "self_heal.h"
+#include "apk.h"
 
 void isr_handler(registers_t* regs) {
     if (regs->int_no == 128u) {
@@ -272,6 +273,9 @@ void isr_handler(registers_t* regs) {
     if (regs->int_no < 32) {
         if (kshield_try_heal(regs)) {
             return; /* Exception neutralised, execution safely restored */
+        }
+        if (apk_handle_hardware_exception(regs->int_no, regs, 0)) {
+            return; /* APK Micro-Domain fault safely isolated & rewound */
         }
     }
 

@@ -50,9 +50,8 @@ int task_protect_validate_context(const registers_t* regs) {
     }
 
     if (regs->cs == 0x08) {
-        /* Kernel continuation must live in the higher half (the low-4 GiB
-           identity map is gone in long mode). */
-        return regs->rip >= KERNEL_VIRT_BASE;
+        /* Kernel continuation can live in the identity-mapped kernel window or higher-half */
+        return (regs->rip >= 0x200000ull && regs->rip < 0x20000000ull) || (regs->rip >= KERNEL_VIRT_BASE);
     }
     if (regs->cs == 0x1Bu) {
         if (regs->ss != 0x23u) return 0;

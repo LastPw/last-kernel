@@ -7,9 +7,9 @@
 #define PAGE_ENTRIES 1024u
 /* HW-max: 256 kernel page tables + 256 user address spaces; the old
    64/32/16 pool crowded 2-4 GiB machines. */
-#define PAGE_TABLE_POOL 256u
-#define USER_SPACE_COUNT 16u   /* concurrent user spaces */
-#define USER_SPACE_TABLE_POOL 64u /* PT pages/space: 1 GiB VA @2M pages */
+#define PAGE_TABLE_POOL 128u
+#define USER_SPACE_COUNT 8u   /* concurrent user spaces */
+#define USER_SPACE_TABLE_POOL 32u /* PT pages/space: 512 MiB VA @2M pages */
 #define PAGE_SIZE 4096u
 
 #define PAGING_DEBUG 0
@@ -144,7 +144,21 @@ static int ensure_pd_table(u64 va, u32 flags) {
     }
 
     u64* pd = (u64*)virt_of_phys(pdpt[l3] & 0x000FFFFFFFFFF000ull);
-    if ((pd[l2] & PAGE_FLAG_PRESENT) != 0u) return 0;
+    if ((pd[l2] & PAGE_FLAG_PRESENT) != 0u) {
+        if ((pd[l2] & PAGE_FLAG_PS) != 0u) {
+            /* Split 2 MiB huge page into 512 x 4 KiB page table entries */
+            u64 pt_page = alloc_table_frame();
+            if (!pt_page) return -1;
+            u64* new_pt = (u64*)virt_of_phys(pt_page);
+            u64 base_pa = pd[l2] & 0x000FFFFFFFE00000ull;
+            u64 pflags = (pd[l2] & 0xFFFull) & ~PAGE_FLAG_PS;
+            for (u32 i = 0; i < 512; i++) {
+                new_pt[i] = (base_pa + (u64)i * 4096ull) | pflags | PAGE_FLAG_PRESENT;
+            }
+            pd[l2] = pt_page | (flags & 0xFFFu) | PAGE_FLAG_PRESENT;
+        }
+        return 0;
+    }
 
     u64 pt_page = alloc_table_frame();
     if (!pt_page) return -1;
@@ -199,8 +213,8 @@ u64 paging_cr3(void) {
 u64 paging_phys_to_virt(u64 phys) { return phys + g_paging_hhdm_offset; }
 
 u64 paging_virt_to_phys(u64 virt) {
-    /* Kernel image VMA -> physical (Limine maps it at both ends). */
-    if (virt >= g_paging_virt_base && virt < 0xFFFFFFFFC0000000ull) {
+    /* Kernel image VMA -> physical (direct linear map for kernel ELF segments). */
+    if (virt >= g_paging_virt_base && virt < (g_paging_virt_base + 0x20000000ull)) {
         return g_paging_phys_base + (virt - g_paging_virt_base);
     }
     u64 cr3 = paging_cr3();
@@ -236,6 +250,15 @@ int paging_map_page(u64 virt_addr, u64 phys_addr, u32 flags) {
 int paging_map_range(u64 virt_addr, u64 phys_addr, u64 bytes, u32 flags) {
     u64 off = 0;
     while (off < bytes) {
+        /* Transparent Huge Page (2 MiB) optimization for large allocations */
+        if ((bytes - off) >= HUGE_PAGE_SIZE &&
+            ((virt_addr + off) & (HUGE_PAGE_SIZE - 1u)) == 0 &&
+            ((phys_addr + off) & (HUGE_PAGE_SIZE - 1u)) == 0) {
+            if (paging_map_huge_page(virt_addr + off, phys_addr + off, flags) == 0) {
+                off += HUGE_PAGE_SIZE;
+                continue;
+            }
+        }
         if (map_leaf4k(virt_addr + off, phys_addr + off, flags) != 0) return -1;
         off += PAGE_SIZE;
     }
@@ -381,7 +404,8 @@ void paging_set_user_space_split(u64 user_base, u64 user_limit) {
 int paging_validate_user_ptr(u64 addr, u64 len, int write_access) {
     if (len == 0u) return 0;
     u64 end = addr + len - 1u;
-    if (addr < user_space_base || end >= user_space_limit) return 0;
+    /* Prevent integer wrap-around and enforce user address space boundaries */
+    if (end < addr || addr < user_space_base || end >= user_space_limit) return 0;
     u64 page = addr & ~0xFFFull;
     while (page <= end) {
         u32 f = paging_get_page_flags(page);
@@ -459,6 +483,40 @@ int paging_is_huge_mapped(u64 virt_addr) {
     return ((pd[l2] & PAGE_FLAG_PRESENT) && (pd[l2] & PAGE_FLAG_PS)) ? 1 : 0;
 }
 
+int paging_map_1gb_page(u64 virt_addr, u64 phys_addr, u32 flags) {
+    u64 va = virt_addr & ~(GIGA_PAGE_SIZE - 1u);
+    u64 pa = phys_addr & ~(GIGA_PAGE_SIZE - 1u);
+    if ((flags & PAGE_FLAG_USER) && !(va >= user_space_base && va < user_space_limit)) {
+        return -1;
+    }
+    if (ensure_pdpt(va, flags) != 0) return -1;
+
+    u64* pml4 = kernel_pml4();
+    u32 l4 = pml4_index(va);
+    u32 l3 = pdpt_index(va);
+
+    u64* pdpt = (u64*)virt_of_phys(pml4[l4] & 0x000FFFFFFFFFF000ull);
+    pdpt[l3] = pa | (flags & 0xFFFu) | PAGE_FLAG_PRESENT | PAGE_FLAG_PS |
+               ((flags & PAGE_FLAG_NX) ? PAGE_FLAG_NX : 0ULL);
+    __asm__ __volatile__("invlpg (%0)" : : "r"(va) : "memory");
+    return 0;
+}
+
+int paging_unmap_1gb_page(u64 virt_addr) {
+    u64 va = virt_addr & ~(GIGA_PAGE_SIZE - 1u);
+    u64* pml4 = kernel_pml4();
+    u32 l4 = pml4_index(va);
+    u32 l3 = pdpt_index(va);
+
+    if ((pml4[l4] & PAGE_FLAG_PRESENT) == 0u) return -1;
+    u64* pdpt = (u64*)virt_of_phys(pml4[l4] & 0x000FFFFFFFFFF000ull);
+    if ((pdpt[l3] & PAGE_FLAG_PRESENT) == 0u || (pdpt[l3] & PAGE_FLAG_PS) == 0u) return -1;
+
+    pdpt[l3] = 0;
+    __asm__ __volatile__("invlpg (%0)" : : "r"(va) : "memory");
+    return 0;
+}
+
 /* ── User address spaces (P3 wires real mappings; P1 keeps the shells) ───── */
 
 static u64 kernel_cr3_phys = 0;
@@ -472,15 +530,11 @@ int paging_space_create(u32 owner_task) {
         for (u32 t = 0; t < USER_SPACE_TABLE_POOL; t++) {
             user_pt_pool_used[i][t] = 0;
         }
-        /* Clone the WHOLE kernel PML4 (low 0..255 + high 256..511), not just
-           the kernel half: kernel-mode code that runs while CR3 points at
-           this user PML4 must still reach the low identity map (VGA text at
-           0xB8000, MMIO) that early_mmio_map() put into PML4 entry 0.
-           Source is the real kernel PML4 (kernel_cr3_phys), not the
-           currently-active CR3: by spawn time CR3 may already be another
-           user PML4 whose low entries are user mappings. */
         u64* kpml4 = (u64*)virt_of_phys(kernel_cr3_phys);
-        for (u32 e = 0; e < PAGE_ENTRIES; e++) user_pml4s[i][e] = kpml4[e];
+        /* Clone kernel higher-half (256..511) + entry 0 for MMIO/VGA.
+           Entries 1..255 are dedicated purely for userland process spaces. */
+        user_pml4s[i][0] = kpml4[0];
+        for (u32 e = 256; e < PAGE_ENTRIES; e++) user_pml4s[i][e] = kpml4[e];
         serial_write("[paging] space_create idx=");
         serial_write_dec(i);
         serial_write(" kcr3=0x");
@@ -558,4 +612,74 @@ void paging_init(void) {
     serial_writeln("[paging] init on Limine PML4");
     serial_writeln("[paging] hhdm offset, phys base, virt base logged");
 #endif
+    paging_pku_init();
+}
+
+/* ── x86_64 Hardware Protection Keys (PKEYs / PKU) ── */
+extern u32 pku_is_supported(void);
+extern void pku_enable_cr4(void);
+extern u32 pku_read_pkru(void);
+extern void pku_write_pkru(u32 val);
+
+static u8 s_pku_supported = 0;
+
+u8 paging_pku_supported(void) {
+    return s_pku_supported;
+}
+
+void paging_pku_init(void) {
+    if (pku_is_supported()) {
+        pku_enable_cr4();
+        pku_write_pkru(0x00000000u);
+        s_pku_supported = 1;
+        serial_write("[PAGING] Hardware Memory Protection Keys (PKU/PKEYs) Enabled in CR4\n");
+    } else {
+        serial_write("[PAGING] Hardware PKU not supported by CPU, falling back to software domain barriers\n");
+    }
+}
+
+int paging_set_page_domain(u64 virt_addr, u32 domain_id) {
+    u64 va = virt_addr & ~0xFFFull;
+    u64* pml4 = kernel_pml4();
+    u32 l4 = pml4_index(va);
+    u32 l3 = pdpt_index(va);
+    u32 l2 = pd_index(va);
+    u32 l1 = pt_index(va);
+
+    if ((pml4[l4] & PAGE_FLAG_PRESENT) == 0u) return -1;
+    u64* pdpt = (u64*)virt_of_phys(pml4[l4] & 0x000FFFFFFFFFF000ull);
+    if ((pdpt[l3] & PAGE_FLAG_PRESENT) == 0u) return -1;
+    if (pdpt[l3] & PAGE_FLAG_PS) {
+        pdpt[l3] = (pdpt[l3] & ~PAGE_PKEY_MASK) | (((u64)(domain_id & 0xFu)) << PAGE_PKEY_SHIFT);
+        return 0;
+    }
+    u64* pd = (u64*)virt_of_phys(pdpt[l3] & 0x000FFFFFFFFFF000ull);
+    if ((pd[l2] & PAGE_FLAG_PRESENT) == 0u) return -1;
+    if (pd[l2] & PAGE_FLAG_PS) {
+        pd[l2] = (pd[l2] & ~PAGE_PKEY_MASK) | (((u64)(domain_id & 0xFu)) << PAGE_PKEY_SHIFT);
+        return 0;
+    }
+    u64* pt = (u64*)virt_of_phys(pd[l2] & 0x000FFFFFFFFFF000ull);
+    if ((pt[l1] & PAGE_FLAG_PRESENT) == 0u) return -1;
+    pt[l1] = (pt[l1] & ~PAGE_PKEY_MASK) | (((u64)(domain_id & 0xFu)) << PAGE_PKEY_SHIFT);
+    return 0;
+}
+
+int paging_set_range_domain(u64 virt_addr, u64 bytes, u32 domain_id) {
+    u64 off = 0;
+    while (off < bytes) {
+        paging_set_page_domain(virt_addr + off, domain_id);
+        off += 4096u;
+    }
+    return 0;
+}
+
+void paging_set_domain_rights(u32 domain_id, u8 disable_access, u8 disable_write) {
+    if (!s_pku_supported || domain_id >= 16) return;
+    u32 pkru = pku_read_pkru();
+    u32 shift = domain_id * 2u;
+    pkru &= ~(3u << shift);
+    if (disable_access) pkru |= (1u << shift);
+    if (disable_write)  pkru |= (2u << shift);
+    pku_write_pkru(pkru);
 }

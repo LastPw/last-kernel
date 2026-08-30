@@ -75,34 +75,51 @@ typedef struct {
     u8 prio_inherited;    /* non-zero when priority was boosted */
     u32 blocked_by;       /* task we're blocked on (priority inheritance) */
     registers_t context;
-    /* FXSAVE/FXRSTOR area (512 bytes): the interrupted task's XMM/SSE
-       state.  The kernel is -mno-sse and never touches XMM regs, so the
-       FPU state belongs to whichever user task last ran; it must be saved
-       on suspend and restored on resume or user tasks clobber each other. */
-    u8 fxsave_area[512] __attribute__((aligned(16)));
+    /* XSAVE/FXSAVE area (up to 2688 bytes): User task's AVX-512/AVX/SSE/x87 state. */
+    u8 fxsave_area[2688] __attribute__((aligned(64)));
 } __attribute__((aligned(64))) sched_task_t;
 
 static sched_task_t tasks[MAX_TASKS];
-/* The kernel runs with -mno-sse and never touches XMM state, so the
-   processor's FXSAVE area always holds the last user task's FPU state.
-   Save it into a task before switching away, restore it before resuming a
-   user task.  Task zero (kernel shell) has no FPU state of its own. */
+
+#include "cpu_detect.h"
+
 static void sched_fxsave(sched_task_t* task) {
     if (task->id == 0u) return;
-    __asm__ __volatile__("fxsave (%0)" : : "r"(task->fxsave_area) : "memory");
+    const cpu_info_t* ci = cpu_get_info();
+    if (ci && ci->has_xsave) {
+        u32 eax = 0xFFFFFFFFu, edx = 0xFFFFFFFFu;
+        __asm__ __volatile__(
+            "xsave %0"
+            : "=m"(*(char*)task->fxsave_area)
+            : "a"(eax), "d"(edx)
+            : "memory"
+        );
+    } else {
+        __asm__ __volatile__("fxsave %0" : "=m"(*(char*)task->fxsave_area) : : "memory");
+    }
 }
 
 static void sched_fxrstor(const sched_task_t* task) {
     if (task->id == 0u) return;
-    __asm__ __volatile__("fxrstor (%0)" : : "r"(task->fxsave_area) : "memory");
+    const cpu_info_t* ci = cpu_get_info();
+    if (ci && ci->has_xsave) {
+        u32 eax = 0xFFFFFFFFu, edx = 0xFFFFFFFFu;
+        __asm__ __volatile__(
+            "xrstor %0"
+            :
+            : "m"(*(const char*)task->fxsave_area), "a"(eax), "d"(edx)
+            : "memory"
+        );
+    } else {
+        __asm__ __volatile__("fxrstor %0" : : "m"(*(const char*)task->fxsave_area) : "memory");
+    }
 }
 
-/* Fresh task FPU state: XMM regs zeroed, MXCSR at its architectural reset
-   value (exceptions masked, round-to-nearest).  A raw zeroed area would
-   leave MXCSR=0 with every XMM exception unmasked. */
 static void sched_fpu_area_reset(u8* area) {
-    memset(area, 0, 512);
+    memset(area, 0, 2688);
+    *(u16*)(area) = 0x037Fu;
     *(u32*)(area + 24) = 0x1F80u;
+    *(u64*)(area + 512) = 0x7ULL;
 }
 
 /* Stack frame of the suspended kernel shell/idle context.  Points at the

@@ -4,6 +4,37 @@
 #include "string.h"
 #include "paging.h"
 #include "task.h"
+#include "cpu_detect.h"
+
+static inline void kshield_save_fpu(u8* area) {
+    const cpu_info_t* ci = cpu_get_info();
+    if (ci && ci->has_xsave) {
+        u32 eax = 0xFFFFFFFFu, edx = 0xFFFFFFFFu;
+        __asm__ __volatile__(
+            "xsave %0"
+            : "=m"(*(char*)area)
+            : "a"(eax), "d"(edx)
+            : "memory"
+        );
+    } else {
+        __asm__ __volatile__("fxsave %0" : "=m"(*(char*)area) : : "memory");
+    }
+}
+
+static inline void kshield_restore_fpu(const u8* area) {
+    const cpu_info_t* ci = cpu_get_info();
+    if (ci && ci->has_xsave) {
+        u32 eax = 0xFFFFFFFFu, edx = 0xFFFFFFFFu;
+        __asm__ __volatile__(
+            "xrstor %0"
+            :
+            : "m"(*(const char*)area), "a"(eax), "d"(edx)
+            : "memory"
+        );
+    } else {
+        __asm__ __volatile__("fxrstor %0" : : "m"(*(const char*)area) : "memory");
+    }
+}
 
 static u32 s_restart_count = 0;
 static u32 s_last_reason = 0;
@@ -62,8 +93,8 @@ void kshield_save_checkpoint(u32 task_id, const registers_t* regs) {
     cp->tick = timer_ticks();
     cp->valid = 1;
 
-    /* 2. Save FPU/SIMD Hardware Registers via FXSAVE64 */
-    __asm__ __volatile__("fxsave64 %0" : "=m"(cp->fxsave_area) : : "memory");
+    /* 2. Save FPU/SIMD Hardware Registers via XSAVE/FXSAVE */
+    kshield_save_fpu(cp->fxsave_area);
 
     /* 3. Save User Stack Memory Page Shadow */
     u64 page_aligned_rsp = regs->rsp & ~0xFFFULL;
@@ -100,8 +131,8 @@ int kshield_try_heal(registers_t* regs) {
 
     if (!cp || !tr) return 0;
 
-    /* 1. Restore FPU/SIMD Context via FXRSTOR64 */
-    __asm__ __volatile__("fxrstor64 %0" : : "m"(cp->fxsave_area) : "memory");
+    /* 1. Restore FPU/SIMD Context via XSAVE/XRSTOR */
+    kshield_restore_fpu(cp->fxsave_area);
     s_kshield_stats.fpu_restores++;
 
     /* 2. Restore User Shadow Memory Pages */
@@ -130,6 +161,9 @@ int kshield_try_heal(registers_t* regs) {
     regs->r13 = cp->r13;
     regs->r14 = cp->r14;
     regs->r15 = cp->r15;
+
+    /* Consume checkpoint so it cannot trigger multiple times */
+    cp->valid = 0;
 
     /* Update Telemetry */
     s_kshield_stats.total_heals++;

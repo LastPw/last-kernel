@@ -8,7 +8,7 @@ AS      := nasm
 LD      := ld
 RUSTC   := rustc
 
-CFLAGS  := -m64 -mcmodel=kernel -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
+CFLAGS  := -m64 -mcmodel=small -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
            -ffreestanding -fno-pic -fstack-protector-strong \
            -mstack-protector-guard=global -nostdlib -nostdinc \
            -Iinclude -Wall -Wextra -O2
@@ -27,10 +27,12 @@ ASM_OBJS := \
 	$(BUILD_DIR)/gdt_flush.o \
 	$(BUILD_DIR)/ap_trampoline.o \
 	$(BUILD_DIR)/switch_to.o \
-	$(BUILD_DIR)/interrupt_stubs.o
+	$(BUILD_DIR)/interrupt_stubs.o \
+	$(BUILD_DIR)/pku.o
 
 C_OBJS := \
 	$(BUILD_DIR)/bootinfo.o \
+	$(BUILD_DIR)/cmdline.o \
 	$(BUILD_DIR)/kernel.o \
 	$(BUILD_DIR)/stack_protector.o \
 	$(BUILD_DIR)/core.o \
@@ -83,6 +85,7 @@ C_OBJS := \
 	$(BUILD_DIR)/pipe.o \
 	$(BUILD_DIR)/ext2.o \
 	$(BUILD_DIR)/fat.o \
+	$(BUILD_DIR)/exfat.o \
 	$(BUILD_DIR)/ntfs.o \
 	$(BUILD_DIR)/minix.o \
 	$(BUILD_DIR)/persistent_disk.o \
@@ -94,6 +97,7 @@ C_OBJS := \
 	$(BUILD_DIR)/rtl8139.o \
 	$(BUILD_DIR)/pcnet.o \
 	$(BUILD_DIR)/virtio_net.o \
+	$(BUILD_DIR)/wifi.o \
 	$(BUILD_DIR)/netstack.o \
 	$(BUILD_DIR)/nic.o \
 	$(BUILD_DIR)/ip.o \
@@ -114,6 +118,7 @@ C_OBJS := \
 	$(BUILD_DIR)/httpd.o \
 	$(BUILD_DIR)/xhci.o \
 	$(BUILD_DIR)/usb_ohci.o \
+	$(BUILD_DIR)/usb_mass.o \
 	$(BUILD_DIR)/keyboard.o \
 	$(BUILD_DIR)/mouse.o \
 	$(BUILD_DIR)/touchpad.o \
@@ -121,12 +126,20 @@ C_OBJS := \
 	$(BUILD_DIR)/serial.o \
 	$(BUILD_DIR)/screen.o \
 	$(BUILD_DIR)/pty.o \
+	$(BUILD_DIR)/hda.o \
+	$(BUILD_DIR)/sound.o \
+	$(BUILD_DIR)/headphone.o \
+	$(BUILD_DIR)/microphone.o \
 	$(BUILD_DIR)/ac97.o \
 	$(BUILD_DIR)/pcspeaker.o \
 	$(BUILD_DIR)/vbe.o \
 	$(BUILD_DIR)/virtio_gpu.o \
 	$(BUILD_DIR)/gpu_drm.o \
 	$(BUILD_DIR)/gpu_backend.o \
+	$(BUILD_DIR)/gpu_3d.o \
+	$(BUILD_DIR)/intel_i915.o \
+	$(BUILD_DIR)/amd_radeon.o \
+	$(BUILD_DIR)/nvidia_nouveau.o \
 	$(BUILD_DIR)/display_mst.o \
 	$(BUILD_DIR)/string.o \
 	$(BUILD_DIR)/entropy.o \
@@ -149,6 +162,7 @@ C_OBJS := \
 	$(BUILD_DIR)/tpm2.o \
 	$(BUILD_DIR)/epoll.o \
 	$(BUILD_DIR)/io_scheduler.o \
+	$(BUILD_DIR)/io_uring.o \
 	$(BUILD_DIR)/shm.o \
 	$(BUILD_DIR)/ipc.o \
 	$(BUILD_DIR)/cgroup.o \
@@ -219,6 +233,20 @@ C_OBJS := \
 	$(BUILD_DIR)/tls_identity.o \
 	$(BUILD_DIR)/tls_bearssl.o \
 	$(BUILD_DIR)/bearssl_entropy.o \
+	$(BUILD_DIR)/apk.o \
+	$(BUILD_DIR)/apk_core.o \
+	$(BUILD_DIR)/apk_tx_journal.o \
+	$(BUILD_DIR)/apk_guard.o \
+	$(BUILD_DIR)/apk_sched_morph.o \
+	$(BUILD_DIR)/apk_pe_loader.o \
+	$(BUILD_DIR)/apk_wasm_engine.o \
+	$(BUILD_DIR)/apk_domain_bridge.o \
+	$(BUILD_DIR)/apk_ebpf.o \
+	$(BUILD_DIR)/apk_ring.o \
+	$(BUILD_DIR)/apk_ai_sched.o \
+	$(BUILD_DIR)/apk_iommu.o \
+	$(BUILD_DIR)/apk_wasm_jit.o \
+	$(BUILD_DIR)/apk_fault_inject.o \
 	$(BUILD_DIR)/kconsole.o
 
 ALL_OBJS := $(ASM_OBJS) $(C_OBJS) $(RUST_LIB)
@@ -248,6 +276,9 @@ $(BUILD_DIR)/switch_to.o: arch/x86_64/boot/switch_to.asm | $(BUILD_DIR)
 $(BUILD_DIR)/interrupt_stubs.o: arch/x86_64/cpu/interrupt_stubs.asm | $(BUILD_DIR)
 	$(AS) $(ASFLAGS) $< -o $@
 
+$(BUILD_DIR)/pku.o: arch/x86_64/boot/pku.asm | $(BUILD_DIR)
+	$(AS) $(ASFLAGS) $< -o $@
+
 # ------------------------------------------------------------------------------
 # Rust Kernel Lib
 # ------------------------------------------------------------------------------
@@ -260,6 +291,9 @@ $(RUST_LIB): $(wildcard rust_kernel/src/*.rs) | $(BUILD_DIR)
 # C Source Rules
 # ------------------------------------------------------------------------------
 $(BUILD_DIR)/bootinfo.o: arch/x86_64/boot/bootinfo.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/cmdline.o: kernel/cmdline.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel.o: kernel/kernel.c | $(BUILD_DIR)
@@ -418,6 +452,9 @@ $(BUILD_DIR)/ext2.o: fs/ext2.c | $(BUILD_DIR)
 $(BUILD_DIR)/fat.o: fs/fat.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/exfat.o: fs/exfat.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/ntfs.o: fs/ntfs.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -449,6 +486,9 @@ $(BUILD_DIR)/pcnet.o: drivers/net/pcnet.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/virtio_net.o: drivers/net/virtio_net.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/wifi.o: drivers/net/wifi.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/netstack.o: net/netstack.c | $(BUILD_DIR)
@@ -511,6 +551,9 @@ $(BUILD_DIR)/xhci.o: drivers/usb/xhci.c | $(BUILD_DIR)
 $(BUILD_DIR)/usb_ohci.o: drivers/usb/usb_ohci.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/usb_mass.o: drivers/usb/usb_mass.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/keyboard.o: drivers/char/keyboard.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -532,6 +575,18 @@ $(BUILD_DIR)/screen.o: drivers/char/screen.c | $(BUILD_DIR)
 $(BUILD_DIR)/pty.o: drivers/char/pty.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/hda.o: drivers/audio/hda.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/sound.o: drivers/audio/sound.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/headphone.o: drivers/audio/headphone.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/microphone.o: drivers/audio/microphone.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/ac97.o: drivers/audio/ac97.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -548,6 +603,18 @@ $(BUILD_DIR)/gpu_drm.o: drivers/video/gpu_drm.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/gpu_backend.o: drivers/video/gpu_backend.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/gpu_3d.o: drivers/video/gpu_3d.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/intel_i915.o: drivers/video/intel_i915.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/amd_radeon.o: drivers/video/amd_radeon.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/nvidia_nouveau.o: drivers/video/nvidia_nouveau.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/display_mst.o: drivers/video/display_mst.c | $(BUILD_DIR)
@@ -614,6 +681,9 @@ $(BUILD_DIR)/epoll.o: net/epoll.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/io_scheduler.o: fs/io_scheduler.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/io_uring.o: kernel/io_uring.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/shm.o: kernel/ipc/shm.c | $(BUILD_DIR)
@@ -760,6 +830,48 @@ $(BUILD_DIR)/compat_bridge.o: kernel/lib/compat_bridge.c | $(BUILD_DIR)
 $(BUILD_DIR)/linux_compat.o: kernel/compat/linux_compat.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/apk.o: kernel/lib/apk.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apk_core.o: kernel/apk/apk_core.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apk_tx_journal.o: kernel/apk/apk_tx_journal.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apk_guard.o: kernel/apk/apk_guard.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apk_sched_morph.o: kernel/apk/apk_sched_morph.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apk_pe_loader.o: kernel/apk/apk_pe_loader.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apk_wasm_engine.o: kernel/apk/apk_wasm_engine.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apk_domain_bridge.o: kernel/apk/apk_domain_bridge.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apk_ebpf.o: kernel/apk/apk_ebpf.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apk_ring.o: kernel/apk/apk_ring.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apk_ai_sched.o: kernel/apk/apk_ai_sched.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apk_iommu.o: kernel/apk/apk_iommu.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apk_wasm_jit.o: kernel/apk/apk_wasm_jit.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apk_fault_inject.o: kernel/apk/apk_fault_inject.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/hal.o: kernel/lib/hal.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -857,28 +969,38 @@ $(BUILD_DIR)/kernel.elf: $(ALL_OBJS) $(BUILD_DIR)/libbearssl.a
 	@echo ">>> [LastKernel] Pure 64-Bit ELF Kernel built successfully: $@"
 
 # ------------------------------------------------------------------------------
-# Bootable Standalone ISO
+# In-House Native Bootloader (Pulse Loader)
 # ------------------------------------------------------------------------------
-iso: $(BUILD_DIR)/lastkernel.iso
+$(BUILD_DIR)/BOOTX64.EFI $(BUILD_DIR)/BOOTIA32.EFI: | $(BUILD_DIR)
+	@echo ">>> [LastKernel] Building native Pulse Loader (UEFI)..."
+	@$(MAKE) -C bootloader/pulse build/PULSELOADER-x64.EFI build/PULSELOADER-ia32.EFI
+	@cp bootloader/pulse/build/PULSELOADER-x64.EFI $(BUILD_DIR)/BOOTX64.EFI
+	@cp bootloader/pulse/build/PULSELOADER-ia32.EFI $(BUILD_DIR)/BOOTIA32.EFI
 
-$(BUILD_DIR)/lastkernel.iso: $(BUILD_DIR)/kernel.elf
-	rm -rf $(BUILD_DIR)/iso_root
-	mkdir -p $(BUILD_DIR)/iso_root/boot/limine $(BUILD_DIR)/iso_root/EFI/BOOT
-	cp $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/iso_root/boot/kernel.elf
-	cp limine.conf $(BUILD_DIR)/iso_root/boot/limine/limine.conf
-	cp limine/limine-bios.sys limine/limine-bios-cd.bin limine/limine-uefi-cd.bin $(BUILD_DIR)/iso_root/boot/limine/
-	cp limine/BOOTX64.EFI $(BUILD_DIR)/iso_root/EFI/BOOT/
-	xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin -no-emul-boot \
-		-boot-load-size 4 -boot-info-table --efi-boot boot/limine/limine-uefi-cd.bin \
-		-efi-boot-part --efi-boot-image --protective-msdos-label \
-		$(BUILD_DIR)/iso_root -o $@
-	./limine/limine bios-install $@
-	@echo ">>> [LastKernel] Standalone Pure Kernel ISO created: $@"
+# ------------------------------------------------------------------------------
+# Bootable Standalone Disk Image (FAT32 with Native Pulse Loader)
+# ------------------------------------------------------------------------------
+image: $(BUILD_DIR)/lastkernel.img
+iso: $(BUILD_DIR)/lastkernel.img
+
+$(BUILD_DIR)/lastkernel.img: $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/BOOTX64.EFI $(BUILD_DIR)/BOOTIA32.EFI
+	@rm -f $@
+	@mformat -C -i $@ -f 2880 ::
+	@mmd -i $@ ::/EFI ::/EFI/BOOT ::/boot
+	@mcopy -i $@ $(BUILD_DIR)/BOOTX64.EFI  ::/EFI/BOOT/BOOTX64.EFI
+	@mcopy -i $@ $(BUILD_DIR)/BOOTIA32.EFI ::/EFI/BOOT/BOOTIA32.EFI
+	@printf 'timeout=3\ndefault=0\n\n[entry LastKernel]\nkernel=/boot/kernel.elf\ncmdline=BOOT_MODE=default\n' > $(BUILD_DIR)/pulse.conf
+	@mcopy -i $@ $(BUILD_DIR)/pulse.conf ::/boot/pulse.conf
+	@mcopy -i $@ $(BUILD_DIR)/kernel.elf ::/boot/kernel.elf
+	@echo ">>> [LastKernel] Bootable disk image created with in-house Pulse Loader: $@"
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) user/build
+	@$(MAKE) -C bootloader/pulse clean
 
 test:
+	@echo ">>> [LastKernel] Running native Pulse Loader test matrix..."
+	@$(MAKE) -C bootloader/pulse test
 	@echo ">>> [LastKernel] Running kernel test suite..."
 	mkdir -p $(BUILD_DIR)/tests
 	awk '/^\/\* ==================== AES-128 Implementation/,/^\/\* ==================== PBKDF2/' kernel/security/fde.c | head -n -2 > $(BUILD_DIR)/tests/fde_aes_core.inc
@@ -901,6 +1023,42 @@ test:
 	./$(BUILD_DIR)/tests/iso_tests
 	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/tcp_window_tests tests/tcp_window_tests.c net/tcp_window.c
 	./$(BUILD_DIR)/tests/tcp_window_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/apk_core_tests tests/apk_core_tests.c
+	./$(BUILD_DIR)/tests/apk_core_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/apk_deep_tests tests/apk_deep_tests.c
+	./$(BUILD_DIR)/tests/apk_deep_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/apk_nextgen_tests tests/apk_nextgen_tests.c
+	./$(BUILD_DIR)/tests/apk_nextgen_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/apk_advanced_tests tests/apk_advanced_tests.c
+	./$(BUILD_DIR)/tests/apk_advanced_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/hda_tests tests/hda_tests.c
+	./$(BUILD_DIR)/tests/hda_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/usb_mass_tests tests/usb_mass_tests.c
+	./$(BUILD_DIR)/tests/usb_mass_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/wifi_tests tests/wifi_tests.c drivers/net/wifi.c
+	./$(BUILD_DIR)/tests/wifi_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/cmdline_tests tests/cmdline_tests.c
+	./$(BUILD_DIR)/tests/cmdline_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/exfat_tests tests/exfat_tests.c fs/exfat.c
+	./$(BUILD_DIR)/tests/exfat_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/ahci_tests tests/ahci_tests.c
+	./$(BUILD_DIR)/tests/ahci_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/headphone_tests tests/headphone_tests.c drivers/audio/headphone.c
+	./$(BUILD_DIR)/tests/headphone_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/microphone_tests tests/microphone_tests.c drivers/audio/microphone.c
+	./$(BUILD_DIR)/tests/microphone_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/gpu_3d_tests tests/gpu_3d_tests.c drivers/video/gpu_3d.c
+	./$(BUILD_DIR)/tests/gpu_3d_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/gpu_hw_drivers_tests tests/gpu_hw_drivers_tests.c drivers/video/intel_i915.c drivers/video/amd_radeon.c drivers/video/nvidia_nouveau.c
+	./$(BUILD_DIR)/tests/gpu_hw_drivers_tests
+	gcc -O2 -Wall -Wextra -iquote include -o $(BUILD_DIR)/tests/io_uring_tests tests/io_uring_tests.c kernel/io_uring.c
+	./$(BUILD_DIR)/tests/io_uring_tests
 
-qemu: $(BUILD_DIR)/lastkernel.iso
-	qemu-system-x86_64 -cdrom $(BUILD_DIR)/lastkernel.iso -m 512M -serial stdio
+OVMF_CODE := /usr/share/edk2/ovmf/OVMF_CODE.fd
+
+qemu: $(BUILD_DIR)/lastkernel.img
+	@if [ -f $(OVMF_CODE) ]; then \
+		qemu-system-x86_64 -bios $(OVMF_CODE) -drive file=$(BUILD_DIR)/lastkernel.img,format=raw,if=ide -m 512M -serial stdio -display none; \
+	else \
+		qemu-system-x86_64 -drive file=$(BUILD_DIR)/lastkernel.img,format=raw -m 512M -serial stdio; \
+	fi

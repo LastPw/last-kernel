@@ -57,10 +57,25 @@ void paging_set_nx_capable(u8 enabled);
 u8 paging_nx_capable(void);
 u32 paging_wx_reject_count(void);
 
-/* Huge page (2 MiB) support */
+/* Huge page (2 MiB & 1 GiB) support */
+#define GIGA_PAGE_SIZE    (1024ULL * 1024ULL * 1024ULL)
+#define GIGA_PAGE_ALIGN   (GIGA_PAGE_SIZE)
+
 int paging_huge_page_supported(void);
 int paging_map_huge_page(u64 virt_addr, u64 phys_addr, u32 flags);
 int paging_unmap_huge_page(u64 virt_addr);
 int paging_is_huge_mapped(u64 virt_addr);
+int paging_map_1gb_page(u64 virt_addr, u64 phys_addr, u32 flags);
+int paging_unmap_1gb_page(u64 virt_addr);
+
+/* ── x86_64 Hardware Protection Keys (PKEYs / PKU) ── */
+#define PAGE_PKEY_SHIFT   59u
+#define PAGE_PKEY_MASK    (0xFull << PAGE_PKEY_SHIFT)
+
+u8   paging_pku_supported(void);
+void paging_pku_init(void);
+int  paging_set_page_domain(u64 virt_addr, u32 domain_id);
+int  paging_set_range_domain(u64 virt_addr, u64 bytes, u32 domain_id);
+void paging_set_domain_rights(u32 domain_id, u8 disable_access, u8 disable_write);
 
 #endif
