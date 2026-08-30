@@ -7,6 +7,7 @@ typedef unsigned int   u32;
 typedef unsigned long long u64;
 typedef signed int     i32;
 typedef signed char    s8;
+typedef signed char    i8;
 typedef signed short   s16;
 typedef signed long long s64;
 typedef signed long long i64;

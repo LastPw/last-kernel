@@ -144,6 +144,14 @@ C_OBJS := \
 	$(BUILD_DIR)/amd_radeon.o \
 	$(BUILD_DIR)/nvidia_nouveau.o \
 	$(BUILD_DIR)/display_mst.o \
+	$(BUILD_DIR)/bluetooth_core.o \
+	$(BUILD_DIR)/bt_intel.o \
+	$(BUILD_DIR)/bt_realtek.o \
+	$(BUILD_DIR)/acpi_ec.o \
+	$(BUILD_DIR)/battery_sbs.o \
+	$(BUILD_DIR)/laptop_vendors.o \
+	$(BUILD_DIR)/backlight_als.o \
+	$(BUILD_DIR)/cpu_power.o \
 	$(BUILD_DIR)/string.o \
 	$(BUILD_DIR)/entropy.o \
 	$(BUILD_DIR)/spinlock.o \
@@ -608,6 +616,30 @@ $(BUILD_DIR)/nvidia_nouveau.o: drivers/video/nvidia_nouveau.c | $(BUILD_DIR)
 $(BUILD_DIR)/display_mst.o: drivers/video/display_mst.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/bluetooth_core.o: drivers/bluetooth/bluetooth_core.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/bt_intel.o: drivers/bluetooth/bt_intel.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/bt_realtek.o: drivers/bluetooth/bt_realtek.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/acpi_ec.o: drivers/platform/acpi_ec.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/battery_sbs.o: drivers/platform/battery_sbs.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/laptop_vendors.o: drivers/platform/laptop_vendors.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/backlight_als.o: drivers/platform/backlight_als.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/cpu_power.o: drivers/platform/cpu_power.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/string.o: kernel/lib/string.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -1000,6 +1032,10 @@ test:
 	./$(BUILD_DIR)/tests/gpu_hw_drivers_tests
 	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/io_uring_tests tests/io_uring_tests.c kernel/io_uring.c
 	./$(BUILD_DIR)/tests/io_uring_tests
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/bluetooth_tests tests/bluetooth_tests.c drivers/bluetooth/bluetooth_core.c drivers/bluetooth/bt_intel.c drivers/bluetooth/bt_realtek.c
+	./$(BUILD_DIR)/tests/bluetooth_tests
+	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/laptop_platform_tests tests/laptop_platform_tests.c drivers/platform/acpi_ec.c drivers/platform/battery_sbs.c drivers/platform/laptop_vendors.c drivers/platform/backlight_als.c drivers/platform/cpu_power.c
+	./$(BUILD_DIR)/tests/laptop_platform_tests
 
 OVMF_CODE := /usr/share/edk2/ovmf/OVMF_CODE.fd
 

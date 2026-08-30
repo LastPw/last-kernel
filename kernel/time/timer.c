@@ -3,6 +3,8 @@
 #include "scheduler.h"
 #include "kernel_monitor.h"
 #include "nic.h"
+#include "bluetooth.h"
+#include "laptop_platform.h"
 #include "netstack.h"
 #include "resource_monitor.h"
 #include "self_heal.h"
@@ -180,6 +182,12 @@ void timer_on_irq(registers_t* regs) {
         ultimate_tick();
         pcoe2_tick();
         ukernel_tick();
+        bluetooth_tick();
+        acpi_ec_poll();
+        battery_sbs_poll();
+        laptop_vendors_poll();
+        backlight_als_poll();
+        cpu_power_poll();
     }
 
     in_tick = 0;

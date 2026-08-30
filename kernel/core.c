@@ -46,6 +46,8 @@
 #include "signature_updater.h"
 #include "string.h"
 #include "nic.h"
+#include "bluetooth.h"
+#include "laptop_platform.h"
 #include "netstack.h"
 #include "httpd.h"
 #include "dhcp.h"
@@ -864,6 +866,14 @@ static int kmod_services(void) {
 
     nic_init();
     wifi_init();
+    bluetooth_init();
+    bt_intel_init((void*)0);
+    bt_realtek_init((void*)0);
+    acpi_ec_init();
+    battery_sbs_init();
+    laptop_vendors_init();
+    backlight_als_init();
+    cpu_power_init();
     /* IPv6 link-local and NDP state depend on the NIC MAC being ready. */
     netstack_init();
     serial_write("[LastOS] NIC RTL8139 ready=");
