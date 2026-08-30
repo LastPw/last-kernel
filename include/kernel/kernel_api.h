@@ -116,8 +116,6 @@ u32 kprocess_count(void);
 int kprocess_get(u32 task_id, process_info_t* out);
 int kprocess_at(u32 index, process_info_t* out);
 u32 kprocess_current(void);
-int klastmap(const char* args);
-int klastshark(const char* args);
 void kantivirus_status(antivirus_status_t* out);
 void kai_security_status(ai_security_status_t* out);
 void khal_status(hal_status_t* out);

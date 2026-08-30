@@ -176,8 +176,6 @@ C_OBJS := \
 	$(BUILD_DIR)/process_monitor.o \
 	$(BUILD_DIR)/memory_monitor.o \
 	$(BUILD_DIR)/paniclog.o \
-	$(BUILD_DIR)/lastmap.o \
-	$(BUILD_DIR)/lastshark.o \
 	$(BUILD_DIR)/metrics.o \
 	$(BUILD_DIR)/sysinfo.o \
 	$(BUILD_DIR)/persist.o \
@@ -704,12 +702,6 @@ $(BUILD_DIR)/memory_monitor.o: kernel/monitor/memory_monitor.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/paniclog.o: kernel/monitor/paniclog.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/lastmap.o: kernel/monitor/lastmap.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/lastshark.o: kernel/monitor/lastshark.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/metrics.o: kernel/metrics.c | $(BUILD_DIR)

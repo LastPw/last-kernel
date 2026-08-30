@@ -219,9 +219,7 @@ int kshield_authorize_module_install(const char* module_name) {
         threat_logger_log(THREAT_SIG_MATCH, 0u, 0xB10C0002u, 0u);
         return -1;
     }
-    if (g_status.lockdown_level >= 3u &&
-        str_cmp(module_name, "lastmap") != 0 &&
-        str_cmp(module_name, "lastshark") != 0) {
+    if (g_status.lockdown_level >= 3u) {
         g_status.blocked_module_installs++;
         return -1;
     }

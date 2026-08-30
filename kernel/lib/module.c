@@ -49,8 +49,6 @@ static int module_is_core(const char* name) {
 static u8 module_trust_of(const char* name) {
     if (!name || !name[0]) return MODULE_TRUST_UNTRUSTED;
     if (module_is_core(name)) return MODULE_TRUST_CORE;
-    if (str_cmp(name, "lastmap") == 0) return MODULE_TRUST_TRUSTED;
-    if (str_cmp(name, "lastshark") == 0) return MODULE_TRUST_TRUSTED;
     if (str_cmp(name, "firewall") == 0) return MODULE_TRUST_TRUSTED;
     if (str_cmp(name, "filetools") == 0) return MODULE_TRUST_COMMUNITY;
     return MODULE_TRUST_COMMUNITY;
@@ -71,8 +69,6 @@ void module_init(void) {
         mods[i].rollback_count = 0u;
     }
 
-    module_install("lastmap");
-    module_install("lastshark");
     module_install("firewall");
     module_install("filetools");
     module_install("resource");
@@ -82,8 +78,6 @@ void module_init(void) {
     module_install("pcoe2");
     module_install("compat");
 
-    module_load("lastmap");
-    module_load("lastshark");
     module_load("firewall");
     module_load("filetools");
     module_load("resource");

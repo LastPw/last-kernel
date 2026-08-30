@@ -2,13 +2,11 @@
 #include "io.h"
 #include "scheduler.h"
 #include "kernel_monitor.h"
-#include "lastmap.h"
 #include "nic.h"
 #include "netstack.h"
 #include "resource_monitor.h"
 #include "self_heal.h"
 #include "sdc.h"
-#include "lastshark.h"
 #include "antivirus.h"
 #include "ai_security.h"
 #include "hal.h"
@@ -182,10 +180,6 @@ void timer_on_irq(registers_t* regs) {
         ultimate_tick();
         pcoe2_tick();
         ukernel_tick();
-    }
-    if (feature_on(TIMER_FEAT_SCANNERS) && (ticks % 50u) == 0u) {
-        lastmap_tick();
-        lastshark_tick();
     }
 
     in_tick = 0;

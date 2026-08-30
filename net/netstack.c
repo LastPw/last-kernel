@@ -4,8 +4,6 @@
 #include "tcp_raw.h"
 #include "tcp_window.h"
 #include "udp_raw.h"
-#include "lastmap.h"
-#include "lastshark.h"
 #include "antivirus.h"
 #include "threat_logger.h"
 #include "timer.h"
@@ -641,7 +639,6 @@ void netstack_poll(u32 budget) {
 
 void netstack_on_frame(const u8* frame, u16 len) {
     g_st.frames_rx++;
-    lastshark_on_frame(frame, len);
     antivirus_on_network_event(len, 0);
 
     if (!frame || len < sizeof(eth_header_t)) {
@@ -843,7 +840,6 @@ if (ip->proto == IP_PROTO_TCP) {
             }
         }
     }
-    lastmap_on_tcp(src_ip, src_port, dst_port, tcp->flags);
     return;
 }
 
@@ -913,7 +909,6 @@ if (ip->proto == IP_PROTO_UDP) {
         g_sock[(u32)sk].state = 2u;
         socket_queue_packet(sk, src_ip, src_port, payload, payload_len);
     }
-    lastmap_on_udp(src_ip, src_port, dst_port, payload, payload_len);
 }
 }
 

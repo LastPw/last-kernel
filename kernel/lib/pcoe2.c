@@ -49,8 +49,6 @@ static void preload_common(void) {
 void pcoe2_preload_predictive(pcoe_mode_t mode) {
     preload_common();
     if (mode == PCOE_MODE_SERVER || mode == PCOE_MODE_VPS) {
-        module_load("lastmap");
-        module_load("lastshark");
         module_load("firewall");
         st.preload_level = 3;
     } else if (mode == PCOE_MODE_DESKTOP) {

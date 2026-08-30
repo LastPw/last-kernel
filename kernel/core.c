@@ -45,8 +45,6 @@
 #include "threat_logger.h"
 #include "signature_updater.h"
 #include "string.h"
-#include "lastmap.h"
-#include "lastshark.h"
 #include "nic.h"
 #include "netstack.h"
 #include "httpd.h"
@@ -463,8 +461,6 @@ static void init_layer_architecture(void) {
 
     /* Application/shell layer. */
     (void)layers_register("shell", LAYER_APPLICATION, 4u);
-    (void)layers_register("lastmap_app", LAYER_APPLICATION, 2u);
-    (void)layers_register("lastshark_app", LAYER_APPLICATION, 2u);
 }
 
 static void core_security_hook(u32 event, u32 arg0, u32 arg1) {
@@ -887,8 +883,6 @@ static int kmod_services(void) {
     }
     security_hook_register("security", core_security_hook);
     sandbox_init();
-    lastmap_init();
-    lastshark_init();
     serial_writeln("[LastOS] init: apps");
     return 0;
 }
@@ -1932,14 +1926,6 @@ int kprocess_at(u32 index, process_info_t* out) {
 
 u32 kprocess_current(void) {
     return scheduler_current_task();
-}
-
-int klastmap(const char* args) {
-    return lastmap_command(args);
-}
-
-int klastshark(const char* args) {
-    return lastshark_command(args);
 }
 
 void kantivirus_status(antivirus_status_t* out) {

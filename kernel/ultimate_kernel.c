@@ -39,8 +39,6 @@ static void preload_common(void) {
 void ukernel_preload_profile(ukernel_mode_t mode) {
     preload_common();
     if (mode == UKERNEL_MODE_SERVER || mode == UKERNEL_MODE_VPS) {
-        module_load("lastmap");
-        module_load("lastshark");
         module_load("firewall");
     } else {
         module_load("filetools");
