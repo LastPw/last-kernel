@@ -14,10 +14,11 @@
 *Designed and engineered in C, Assembly, and Rust for x86_64 SMP architectures.*
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg?style=flat-square)]()
-[![Architecture](https://img.shields.io/badge/arch-x86__64%20SMP-blue.svg?style=flat-square)]()
+[![Architecture](https://img.shields.io/badge/arch-x86__64%20SMP%20%7C%20NUMA-blue.svg?style=flat-square)]()
+[![Edition](https://img.shields.io/badge/edition-Enterprise%20Server-purple.svg?style=flat-square)]()
 [![Bootloader](https://img.shields.io/badge/bootloader-Pulse%20Loader%20(UEFI%2FBIOS)-orange.svg?style=flat-square)]()
-[![Test Suite](https://img.shields.io/badge/tests-17%20suites%20passing%20100%25-success.svg?style=flat-square)]()
-[![Lines of Code](https://img.shields.io/badge/code-186k%2B%20lines-informational.svg?style=flat-square)]()
+[![Test Suite](https://img.shields.io/badge/tests-18%20suites%20passing%20100%25-success.svg?style=flat-square)]()
+[![Lines of Code](https://img.shields.io/badge/code-188k%2B%20lines-informational.svg?style=flat-square)]()
 [![Language](https://img.shields.io/badge/language-C11%20%7C%20NASM%20%7C%20Rust-lightblue.svg?style=flat-square)]()
 
 </div>
