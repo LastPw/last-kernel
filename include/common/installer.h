@@ -105,7 +105,9 @@ int  installer_create_raid(u32 level, const char* member_disks[], u32 disk_count
 int  installer_format_partition(const char* partition_device, const char* fs_type);
 int  installer_bootstrap_rootfs(const char* mount_point, u32 bundle_mask);
 int  installer_configure_network(const installer_net_config_t* net, const char* root_mount);
+int  installer_configure_hostname(const char* hostname, const char* root_mount);
 int  installer_configure_admin(const char* username, const char* password_hash, const char* ssh_key, const char* root_mount);
+int  installer_configure_user_account(const char* username, const char* password, u8 is_admin, const char* root_mount);
 int  installer_install_bootloader(const char* boot_device, const char* root_mount, u32 kernel_profile);
 int  installer_run_preflight_check(const installer_config_t* cfg);
 
