@@ -1042,13 +1042,20 @@ test:
 	./$(BUILD_DIR)/tests/laptop_platform_tests
 	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/server_edition_tests tests/server_edition_tests.c kernel/server/numa.c drivers/block/raid_server.c net/server_net.c drivers/platform/ipmi_bmc.c kernel/server/microvm.c kernel/server/server_profile.c
 	./$(BUILD_DIR)/tests/server_edition_tests
+	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/installer_tests tests/installer_tests.c tools/installer/installer_core.c
+	./$(BUILD_DIR)/tests/installer_tests
 	@echo "\n======================================================="
 	@echo "   LastHTTPD Enterprise Rust Web Server & WAF Tests    "
 	@echo "======================================================="
 	cd services/last-httpd && cargo test --quiet
-	@echo ">>> ALL 10 LASTHTTPD ENTERPRISE SUITES PASSED 100% SUCCESSFULLY! <<<\n"
+	@echo ">>> ALL 14 LASTHTTPD ENTERPRISE SUITES PASSED 100% SUCCESSFULLY! <<<\n"
 
-server-services:
+installer:
+	@mkdir -p $(BUILD_DIR)
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/last-install tools/installer/last_install.c tools/installer/installer_core.c
+	@echo ">>> [LastKernel-Installer] Commercial CLI installer built: $(BUILD_DIR)/last-install"
+
+server-services: installer
 	@echo ">>> Building LastHTTPD Enterprise Server Daemon..."
 	cd services/last-httpd && cargo build --release
 	@mkdir -p $(BUILD_DIR)/server_root/conf $(BUILD_DIR)/server_root/public
