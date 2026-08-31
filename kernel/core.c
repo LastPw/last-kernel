@@ -54,6 +54,7 @@
 #include "ipmi_bmc.h"
 #include "microvm.h"
 #include "server_profile.h"
+#include "apk.h"
 #include "netstack.h"
 #include "httpd.h"
 #include "dhcp.h"
@@ -834,6 +835,7 @@ static int kmod_services(void) {
     epoll_init();
     shm_init();
     pkg_manager_init();
+    apk_init();
     keyboard_init();
     mouse_init();
     touchpad_init();

@@ -1,6 +1,7 @@
 #include "server_profile.h"
 #include "string.h"
 #include "spinlock.h"
+#include "apk.h"
 
 /* ==============================================================================
  * Server Performance Profile & Prometheus OpenMetrics Exporter
@@ -12,6 +13,9 @@ static spinlock_t s_prof_lock;
 void server_profile_init(void) {
     spinlock_init(&s_prof_lock);
     u32 flags = spinlock_lock_irqsave(&s_prof_lock);
+
+    /* Unify with APK Polymorphic Engine in Server Mode */
+    apk_set_morph_mode(APK_MORPH_THROUGHPUT);
 
     s_telem.profile = KERNEL_PROFILE_SERVER;
     s_telem.uptime_seconds = 3600;

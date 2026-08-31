@@ -22,5 +22,6 @@ int pkg_manager_init(void);
 int pkg_manager_list(lastos_package_t* out_pkgs, u32 max_pkgs);
 int pkg_manager_install(const char* pkg_name);
 int pkg_manager_remove(const char* pkg_name);
+int pkg_manager_exec(const char* pkg_name);
 
 #endif

@@ -14,11 +14,14 @@
 
 /* Mock kernel dependencies for host testing */
 static u32 s_mock_ticks = 1000;
+static u32 s_mock_apk_morph = 0;
 u32 timer_ticks(void) { return s_mock_ticks++; }
 void spinlock_init(spinlock_t* lock) { (void)lock; }
 u32 spinlock_lock_irqsave(spinlock_t* lock) { (void)lock; return 0; }
 void spinlock_unlock_irqrestore(spinlock_t* lock, u32 flags) { (void)lock; (void)flags; }
 void str_ncpy(char* dst, const char* src, u32 n) { strncpy(dst, src, n); }
+int apk_set_morph_mode(u32 mode) { s_mock_apk_morph = mode; return 0; }
+u32 apk_get_morph_mode(void) { return s_mock_apk_morph; }
 
 /* Mock I/O ports for IPMI KCS */
 static u8 s_mock_io_space[1024];
@@ -134,6 +137,7 @@ int main(void) {
     printf("  [6/6] Testing Server Profile & Prometheus Metrics Exporter... ");
     server_profile_init();
     assert(server_profile_is_server() == 1);
+    assert(apk_get_morph_mode() == 1); /* Unified APK_MORPH_THROUGHPUT Mode */
 
     char metrics_buf[2048];
     u32 len = server_export_prometheus_metrics(metrics_buf, sizeof(metrics_buf));
