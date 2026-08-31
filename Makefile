@@ -118,7 +118,6 @@ C_OBJS := \
 	$(BUILD_DIR)/dhcp_server.o \
 	$(BUILD_DIR)/airmesh.o \
 	$(BUILD_DIR)/wireguard.o \
-	$(BUILD_DIR)/httpd.o \
 	$(BUILD_DIR)/xhci.o \
 	$(BUILD_DIR)/usb_ohci.o \
 	$(BUILD_DIR)/usb_mass.o \
@@ -191,15 +190,12 @@ C_OBJS := \
 	$(BUILD_DIR)/memory_monitor.o \
 	$(BUILD_DIR)/paniclog.o \
 	$(BUILD_DIR)/metrics.o \
-	$(BUILD_DIR)/sysinfo.o \
 	$(BUILD_DIR)/persist.o \
-	$(BUILD_DIR)/clipboard.o \
 	$(BUILD_DIR)/secure_patch.o \
 	$(BUILD_DIR)/ktrace.o \
 	$(BUILD_DIR)/module.o \
 	$(BUILD_DIR)/kinit.o \
 	$(BUILD_DIR)/proc_core.o \
-	$(BUILD_DIR)/plugin.o \
 	$(BUILD_DIR)/memlab.o \
 	$(BUILD_DIR)/schedlab.o \
 	$(BUILD_DIR)/iolab.o \
@@ -543,9 +539,6 @@ $(BUILD_DIR)/airmesh.o: net/airmesh.c | $(BUILD_DIR)
 $(BUILD_DIR)/wireguard.o: net/wireguard.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/httpd.o: net/httpd.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/xhci.o: drivers/usb/xhci.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -762,13 +755,7 @@ $(BUILD_DIR)/paniclog.o: kernel/monitor/paniclog.c | $(BUILD_DIR)
 $(BUILD_DIR)/metrics.o: kernel/metrics.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/sysinfo.o: kernel/monitor/sysinfo.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/persist.o: kernel/lib/persist.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/clipboard.o: kernel/lib/clipboard.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/secure_patch.o: kernel/lib/secure_patch.c | $(BUILD_DIR)
@@ -784,9 +771,6 @@ $(BUILD_DIR)/kinit.o: kernel/lib/kinit.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/proc_core.o: kernel/ipc/proc_core.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/plugin.o: kernel/plugin.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/memlab.o: mm/memlab.c | $(BUILD_DIR)

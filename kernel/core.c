@@ -29,7 +29,6 @@
 #include "bootinfo.h"
 #include "serial.h"
 #include "persist.h"
-#include "clipboard.h"
 #include "security.h"
 #include "memory_protect.h"
 #include "task_protect.h"
@@ -56,7 +55,6 @@
 #include "server_profile.h"
 #include "apk.h"
 #include "netstack.h"
-#include "httpd.h"
 #include "dhcp.h"
 #include "module.h"
 #include "kinit.h"
@@ -1316,8 +1314,6 @@ void core_init(void) {
     serial_writeln("[LastOS] dbg: persist_init");
     persist_init();
     serial_writeln("[LastOS] dbg: persist done");
-    clipboard_init();
-    serial_writeln("[LastOS] dbg: clipboard done");
     threat_logger_init();
     serial_writeln("[LastOS] dbg: threatlog done");
     paniclog_init();

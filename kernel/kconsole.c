@@ -9,7 +9,6 @@
 #include "power.h"
 #include "netstack.h"
 #include "dhcp.h"
-#include "httpd.h"
 #include "timer.h"
 #include "vfs.h"
 #include "lastfs.h"
@@ -242,30 +241,10 @@ static void cmd_ping(const char* target) {
 }
 
 static void cmd_httpd(const char* args) {
-    while (*args == ' ') args++;
-    if (str_ncmp(args, "start", 5) == 0) {
-        if (httpd_active()) {
-            kprintln("[httpd] Web server is already running.");
-            return;
-        }
-        if (httpd_start(80, "/") == 0) {
-            kprintln("[httpd] Embedded HTTP Web Server running on port 80.");
-            kprintln("[httpd] Serving live web dashboard at http://10.0.2.15/");
-        } else {
-            kprintln("[httpd] Failed to start HTTP server listener.");
-        }
-    } else if (str_ncmp(args, "stop", 4) == 0) {
-        httpd_stop();
-        kprintln("[httpd] Web server stopped.");
-    } else {
-        u16 port = 0; u32 reqs = 0, errs = 0; u8 proxy = 0; char root[32];
-        httpd_status(&port, &reqs, &errs, &proxy, root, sizeof(root));
-        kprint("--- HTTP Server Status ---\n  State     : ");
-        kprintln(httpd_active() ? "RUNNING" : "STOPPED");
-        kprint("  Port      : "); kprint_u32(port ? port : 80); kprintln("");
-        kprint("  Requests  : "); kprint_u32(reqs); kprintln("");
-        kprint("  Errors    : "); kprint_u32(errs); kprintln("");
-    }
+    (void)args;
+    kprintln("--- LastHTTPD Web Server (Ring-3 Userspace) ---");
+    kprintln("  Architecture: High-Performance Async Rust Daemon");
+    kprintln("  Execution   : Run '/bin/httpd' in user shell or start 'last-httpd'");
 }
 
 static void cmd_disks(void) {
@@ -1058,9 +1037,6 @@ void kconsole_run(void) {
                 ch = serial_try_read_char();
             }
             if (ch <= 0) {
-                if (httpd_active()) {
-                    httpd_poll(8u);
-                }
                 __asm__ __volatile__("pause");
                 continue;
             }
