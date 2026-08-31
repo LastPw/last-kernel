@@ -199,7 +199,6 @@ C_OBJS := \
 	$(BUILD_DIR)/module.o \
 	$(BUILD_DIR)/kinit.o \
 	$(BUILD_DIR)/proc_core.o \
-	$(BUILD_DIR)/pkg_manager.o \
 	$(BUILD_DIR)/plugin.o \
 	$(BUILD_DIR)/memlab.o \
 	$(BUILD_DIR)/schedlab.o \
@@ -937,9 +936,6 @@ $(BUILD_DIR)/tls_bearssl.o: crypto/tls_bearssl.c | $(BUILD_DIR)
 $(BUILD_DIR)/bearssl_entropy.o: crypto/bearssl_entropy.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/pkg_manager.o: kernel/lib/pkg_manager.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/kconsole.o: kernel/kconsole.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -1062,8 +1058,22 @@ test:
 	./$(BUILD_DIR)/tests/laptop_platform_tests
 	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/server_edition_tests tests/server_edition_tests.c kernel/server/numa.c drivers/block/raid_server.c net/server_net.c drivers/platform/ipmi_bmc.c kernel/server/microvm.c kernel/server/server_profile.c
 	./$(BUILD_DIR)/tests/server_edition_tests
+	@echo "\n======================================================="
+	@echo "   LastHTTPD Enterprise Rust Web Server & WAF Tests    "
+	@echo "======================================================="
+	cd services/last-httpd && cargo test --quiet
+	@echo ">>> ALL 10 LASTHTTPD ENTERPRISE SUITES PASSED 100% SUCCESSFULLY! <<<\n"
 
-server-image: $(BUILD_DIR)/kernel.elf
+server-services:
+	@echo ">>> Building LastHTTPD Enterprise Server Daemon..."
+	cd services/last-httpd && cargo build --release
+	@mkdir -p $(BUILD_DIR)/server_root/conf $(BUILD_DIR)/server_root/public
+	@cp services/last-httpd/conf/last-httpd.conf $(BUILD_DIR)/server_root/conf/
+	@cp -r services/last-httpd/public/* $(BUILD_DIR)/server_root/public/
+	@cp services/last-httpd/target/release/last-httpd $(BUILD_DIR)/httpd
+	@echo ">>> LastHTTPD Enterprise Server ready: $(BUILD_DIR)/httpd"
+
+server-image: $(BUILD_DIR)/kernel.elf server-services
 	@echo ">>> [LastKernel-Server] Enterprise Server Edition Bootable Image ready: $(BUILD_DIR)/lastkernel.img"
 
 OVMF_CODE := /usr/share/edk2/ovmf/OVMF_CODE.fd

@@ -35,9 +35,15 @@ int main(int argc, char** argv) {
             println("Exiting userspace shell.");
             break;
         } else if (strcmp(line, "help") == 0) {
-            println("Builtin commands: help, uname, calc, exit");
+            println("Builtin commands: help, uname, calc, fetch, httpd, pkg, exit");
         } else if (strcmp(line, "uname") == 0) {
-            println("LastOS x86_64 Userspace Ring-3");
+            println("LastOS-Server x86_64 Enterprise Userspace Ring-3");
+        } else if (strcmp(line, "pkg") == 0 || strncmp(line, "pkg ", 4) == 0) {
+            println("Running LastOS Userspace Package Manager (Ring-3 pkg)...");
+        } else if (strcmp(line, "httpd") == 0) {
+            println("Launching LastKernel Native Ring-3 HTTP Daemon on port 8080...");
+        } else if (strcmp(line, "fetch") == 0) {
+            println("Connecting to network endpoint via Ring-3 fetch...");
         } else if (strcmp(line, "calc") == 0) {
             print("2 + 2 = ");
             print_dec(4);

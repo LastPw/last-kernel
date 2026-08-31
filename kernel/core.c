@@ -834,7 +834,6 @@ static int kmod_services(void) {
     tpm2_init();
     epoll_init();
     shm_init();
-    pkg_manager_init();
     apk_init();
     keyboard_init();
     mouse_init();
