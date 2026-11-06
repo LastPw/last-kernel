@@ -1,12 +1,13 @@
 /* ==============================================================================
- * LastKernel Enterprise Server Edition — Gentoo-Style 'last-install' CLI Utility
- * Interactive & Scriptable Terminal Installer with Custom Credentials & Hostname
+ * LastKernel Enterprise Server Edition — Master CLI & Unattended Installer
+ * Complete Terminal Command-Line & Automation Suite for Cloud & Bare-Metal
  * ============================================================================== */
 
 #include "installer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define ANSI_RESET   "\033[0m"
 #define ANSI_BOLD    "\033[1m"
@@ -14,12 +15,11 @@
 #define ANSI_GREEN   "\033[32m"
 #define ANSI_YELLOW  "\033[33m"
 #define ANSI_RED     "\033[31m"
-#define ANSI_MAGENTA "\033[35m"
 
 static void print_banner(void) {
     printf("%s%s", ANSI_BOLD, ANSI_CYAN);
     printf("================================================================================\n");
-    printf("     🚀 LastKernel Enterprise Server Edition — Advanced CLI Installer          \n");
+    printf("     🚀 LastKernel Enterprise Server Edition — Commercial Installer CLI        \n");
     printf("     High-Performance, Multi-Domain, Polymorphic Cloud & Edge Server OS        \n");
     printf("================================================================================\n");
     printf("%s", ANSI_RESET);
@@ -28,129 +28,24 @@ static void print_banner(void) {
 static void print_usage(void) {
     printf("Usage: last-install <command> [options]\n\n");
     printf("Available Commands:\n");
-    printf("  %swizard%s                       Launch interactive Gentoo-style step-by-step installation\n", ANSI_GREEN, ANSI_RESET);
+    printf("  %swizard%s                       Launch full 7-step interactive Gentoo-style TUI wizard\n", ANSI_GREEN, ANSI_RESET);
+    printf("  %sprobe-hw%s                     Run deep hardware diagnostics (CPU, NUMA, RAM, NVMe SMART)\n", ANSI_GREEN, ANSI_RESET);
     printf("  %sprobe-disks%s                  Scan & display all hardware block storage devices (NVMe/SATA)\n", ANSI_GREEN, ANSI_RESET);
-    printf("  %spartition%s <disk>             Create standard GPT partitions (EFI, Root, Swap)\n", ANSI_GREEN, ANSI_RESET);
+    printf("  %spartition%s <disk> [swap_mb]   Create standard GPT partitions (512MB EFI, LastFS Root, Swap)\n", ANSI_GREEN, ANSI_RESET);
     printf("  %sraid-create%s <lvl> <disks...> Construct Software RAID 0/1/5/6 Array with Galois Field parity\n", ANSI_GREEN, ANSI_RESET);
-    printf("  %sformat%s <part> <fs>           Format partition with LastFS 2.0, Ext4 or VFAT\n", ANSI_GREEN, ANSI_RESET);
-    printf("  %sbootstrap%s <mount>            Deploy base rootfs and default enterprise server bundles\n", ANSI_GREEN, ANSI_RESET);
-    printf("  %sset-user%s <user> <pass> <adm> Configure administrator or user account on target\n", ANSI_GREEN, ANSI_RESET);
-    printf("  %sset-hostname%s <hostname>      Configure server computer name on target\n", ANSI_GREEN, ANSI_RESET);
-    printf("  %sconfig-net%s                   Generate production network & DNS interface profiles\n", ANSI_GREEN, ANSI_RESET);
-    printf("  %sbootloader%s <disk>            Install UEFI Limine bootloader with chosen kernel profile\n", ANSI_GREEN, ANSI_RESET);
+    printf("  %sformat%s <part> <fs_type>      Format partition with LastFS 2.0, FAT32 or Swap\n", ANSI_GREEN, ANSI_RESET);
+    printf("  %sbootstrap%s <mount_path>       Deploy Linux FHS rootfs and commercial enterprise bundles\n", ANSI_GREEN, ANSI_RESET);
+    printf("  %sset-user%s <user> <pass> <adm> Configure administrator or user account with PBKDF2-SHA512\n", ANSI_GREEN, ANSI_RESET);
+    printf("  %sset-hostname%s <hostname>      Configure server computer name in /etc/hostname & /etc/hosts\n", ANSI_GREEN, ANSI_RESET);
+    printf("  %sconfig-net%s <if> <ip> <gw>    Generate production network & DNS interface profiles\n", ANSI_GREEN, ANSI_RESET);
+    printf("  %sbootloader%s <disk> [profile]  Install UEFI Limine bootloader with chosen kernel profile\n", ANSI_GREEN, ANSI_RESET);
+    printf("  %sunattended%s                   Execute non-interactive automated server provisioning\n", ANSI_GREEN, ANSI_RESET);
     printf("  %sverify%s                       Perform cryptographic and hardware pre-flight validation\n\n", ANSI_GREEN, ANSI_RESET);
-}
-
-static void read_input_with_default(const char* prompt, const char* default_val, char* out_buf, size_t buf_size) {
-    printf("%s [%s%s%s]: ", prompt, ANSI_CYAN, default_val, ANSI_RESET);
-    char line[128];
-    if (fgets(line, sizeof(line), stdin)) {
-        size_t len = strlen(line);
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
-            line[--len] = '\0';
-        }
-        if (len > 0) {
-            snprintf(out_buf, buf_size, "%s", line);
-            return;
-        }
-    }
-    snprintf(out_buf, buf_size, "%s", default_val);
-}
-
-static int run_interactive_wizard(void) {
-    print_banner();
-    printf("%s[*] Step 1/7: Probing Hardware Storage Devices...%s\n", ANSI_BOLD, ANSI_RESET);
-
-    installer_disk_t disks[INSTALLER_MAX_DISKS];
-    int count = installer_probe_disks(disks, INSTALLER_MAX_DISKS);
-
-    printf("    Found %s%d%s physical block storage devices:\n", ANSI_YELLOW, count, ANSI_RESET);
-    for (int i = 0; i < count; i++) {
-        printf("    [%d] %s%s%s - %s (%llu GB, %s)\n",
-            i, ANSI_BOLD, disks[i].device_path, ANSI_RESET,
-            disks[i].model, (unsigned long long)disks[i].capacity_gb,
-            disks[i].is_nvme ? "PCIe NVMe SSD" : "SATA/SAS HDD");
-    }
-
-    printf("\n%s[*] Step 2/7: Partitioning Target Drive (/dev/nvme0n1)...%s\n", ANSI_BOLD, ANSI_RESET);
-    installer_partition_disk("/dev/nvme0n1", 0, 8192); /* Auto root + 8GB Swap */
-    printf("    %s✔%s Partition 1: /dev/nvme0n1p1 (512 MB, EFI System, VFAT /boot/efi)\n", ANSI_GREEN, ANSI_RESET);
-    printf("    %s✔%s Partition 2: /dev/nvme0n1p2 (1911 GB, LastOS Root, LastFS 2.0 /)\n", ANSI_GREEN, ANSI_RESET);
-    printf("    %s✔%s Partition 3: /dev/nvme0n1p3 (8192 MB, Linux Swap)\n", ANSI_GREEN, ANSI_RESET);
-
-    printf("\n%s[*] Step 3/7: Formatting High-Speed Filesystems...%s\n", ANSI_BOLD, ANSI_RESET);
-    installer_format_partition("/dev/nvme0n1p1", "vfat");
-    installer_format_partition("/dev/nvme0n1p2", "lastfs");
-    installer_format_partition("/dev/nvme0n1p3", "swap");
-    printf("    %s✔%s All partitions successfully formatted and mounted on /mnt/target\n", ANSI_GREEN, ANSI_RESET);
-
-    printf("\n%s[*] Step 4/7: Deploying Commercial Enterprise Application Bundles...%s\n", ANSI_BOLD, ANSI_RESET);
-    u32 bundles = BUNDLE_ALL_ENTERPRISE;
-    installer_bootstrap_rootfs("/mnt/target", bundles);
-    printf("    %s✔%s [LastHTTPD] High-Performance Rust Web Server & TLS 1.3 Reverse Proxy\n", ANSI_GREEN, ANSI_RESET);
-    printf("    %s✔%s [WireGuard] In-Kernel Zero-Trust Network Mesh\n", ANSI_GREEN, ANSI_RESET);
-    printf("    %s✔%s [MicroVM] Intel VT-x Hardware Virtualization & Container Jail\n", ANSI_GREEN, ANSI_RESET);
-    printf("    %s✔%s [Prometheus] OpenMetrics Telemetry Exporter\n", ANSI_GREEN, ANSI_RESET);
-    printf("    %s✔%s [LastPKG] Userspace Package Manager & CLI\n", ANSI_GREEN, ANSI_RESET);
-
-    /* Interactive Hostname and Network Configuration */
-    printf("\n%s[*] Step 5/7: Configuring Server Network & Hostname...%s\n", ANSI_BOLD, ANSI_RESET);
-    char custom_hostname[64];
-    if (getenv("INTERACTIVE_INSTALL")) {
-        read_input_with_default("Enter Server Hostname (Computer Name)", "last-server-node01", custom_hostname, sizeof(custom_hostname));
-    } else {
-        snprintf(custom_hostname, sizeof(custom_hostname), "last-server-node01");
-    }
-    
-    installer_net_config_t net;
-    memset(&net, 0, sizeof(net));
-    snprintf(net.interface_name, sizeof(net.interface_name), "eth0");
-    snprintf(net.ip_address, sizeof(net.ip_address), "10.0.2.15/24");
-    snprintf(net.gateway, sizeof(net.gateway), "10.0.2.2");
-    snprintf(net.primary_dns, sizeof(net.primary_dns), "1.1.1.1");
-    snprintf(net.hostname, sizeof(net.hostname), "%s", custom_hostname);
-    net.enable_rss_multi_queue = 1;
-    net.enable_bbrv3 = 1;
-    installer_configure_network(&net, "/mnt/target");
-    installer_configure_hostname(custom_hostname, "/mnt/target");
-    printf("    %s✔%s Hostname: %s%s%s (Static IP: %s, RSS Multi-Queue: ON, BBRv3: ON)\n",
-        ANSI_GREEN, ANSI_RESET, ANSI_BOLD, net.hostname, ANSI_RESET, net.ip_address);
-
-    /* Interactive Root & User Security Credentials */
-    printf("\n%s[*] Step 6/7: Configuring Custom User Credentials & Security Identity...%s\n", ANSI_BOLD, ANSI_RESET);
-    char custom_admin_user[32];
-    char custom_admin_pass[64];
-    if (getenv("INTERACTIVE_INSTALL")) {
-        read_input_with_default("Enter Administrator Username", "root", custom_admin_user, sizeof(custom_admin_user));
-        read_input_with_default("Enter Administrator Password", "root", custom_admin_pass, sizeof(custom_admin_pass));
-    } else {
-        snprintf(custom_admin_user, sizeof(custom_admin_user), "root");
-        snprintf(custom_admin_pass, sizeof(custom_admin_pass), "root");
-    }
-
-    installer_configure_user_account(custom_admin_user, custom_admin_pass, 1, "/mnt/target");
-    installer_configure_user_account("user", "user", 0, "/mnt/target");
-    printf("    %s✔%s Administrator Account '%s%s%s' configured with Salted SHA-256 Auth\n",
-        ANSI_GREEN, ANSI_RESET, ANSI_BOLD, custom_admin_user, ANSI_RESET);
-    printf("    %s✔%s Standard Userspace Account 'user' configured for non-root daily tasks\n", ANSI_GREEN, ANSI_RESET);
-    printf("    %s✔%s SSH Ed25519 authentication keys & /root/.ssh/authorized_keys deployed\n", ANSI_GREEN, ANSI_RESET);
-
-    printf("\n%s[*] Step 7/7: Installing UEFI / Limine 64-Bit Bootloader...%s\n", ANSI_BOLD, ANSI_RESET);
-    installer_install_bootloader("/dev/nvme0n1", "/mnt/target", 1); /* Server profile */
-    printf("    %s✔%s Limine bootloader contract written to /boot/limine.cfg\n", ANSI_GREEN, ANSI_RESET);
-
-    printf("\n%s================================================================================%s\n", ANSI_CYAN, ANSI_RESET);
-    printf("%s%s🎉 LastKernel Enterprise Server Installation Completed Successfully!%s\n", ANSI_BOLD, ANSI_GREEN, ANSI_RESET);
-    printf("Server Name: %s%s%s | Administrator: %s%s%s\n",
-        ANSI_BOLD, custom_hostname, ANSI_RESET, ANSI_BOLD, custom_admin_user, ANSI_RESET);
-    printf("You can now unmount /mnt/target and reboot into your new enterprise server.\n");
-    printf("%s================================================================================%s\n\n", ANSI_CYAN, ANSI_RESET);
-
-    return 0;
 }
 
 int main(int argc, char** argv) {
     installer_init();
+    installer_tui_init();
 
     if (argc < 2) {
         print_banner();
@@ -158,14 +53,37 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    installer_master_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    snprintf(cfg.root_mount_path, sizeof(cfg.root_mount_path), "/mnt/target");
+    snprintf(cfg.hostname, sizeof(cfg.hostname), "last-server-node01");
+    cfg.kernel_profile = 1;
+    cfg.selected_bundles = BUNDLE_ALL_ENTERPRISE;
+
     if (strcmp(argv[1], "wizard") == 0) {
-        return run_interactive_wizard();
+        return installer_tui_run_wizard(&cfg);
+    } else if (strcmp(argv[1], "probe-hw") == 0) {
+        hw_system_summary_t sys;
+        installer_hw_probe_system(&sys);
+        printf("%s--- System Hardware Topology ---%s\n", ANSI_BOLD, ANSI_RESET);
+        printf("  Processor : %s (%u Cores, %u NUMA Nodes)\n", sys.cpu_model, sys.cpu_count, sys.numa_nodes_count);
+        printf("  Memory    : %llu MB Total (%llu MB Free)\n", (unsigned long long)sys.total_ram_mb, (unsigned long long)sys.free_ram_mb);
+        printf("  Security  : VMX Hypervisor: %s | PKEYs: %s | AES-NI: %s | AVX-512: %s\n",
+               sys.has_vmx_hypervisor ? "Active" : "Disabled",
+               sys.has_pkeys ? "Active" : "Disabled",
+               sys.has_aes_ni ? "Active" : "Disabled",
+               sys.has_avx512 ? "Active" : "Disabled");
+        return 0;
     } else if (strcmp(argv[1], "probe-disks") == 0) {
-        installer_disk_t disks[INSTALLER_MAX_DISKS];
-        int n = installer_probe_disks(disks, INSTALLER_MAX_DISKS);
-        printf("Detected %d block devices.\n", n);
-        for (int i = 0; i < n; i++) {
-            printf("[%d] %s: %s (%llu GB)\n", i, disks[i].device_path, disks[i].model, (unsigned long long)disks[i].capacity_gb);
+        hw_disk_device_t disks[INSTALLER_MAX_DISKS];
+        int count = installer_hw_probe_disks(disks, INSTALLER_MAX_DISKS);
+        printf("%sFound %d block storage devices:%s\n", ANSI_BOLD, count, ANSI_RESET);
+        for (int i = 0; i < count; i++) {
+            printf("  [%d] %-16s %-32s (%5llu GB, %-12s, Sectors: %llu)\n",
+                   i + 1, disks[i].device_path, disks[i].model,
+                   (unsigned long long)disks[i].capacity_gb,
+                   disks[i].is_nvme ? "NVMe SSD" : "SATA/SAS",
+                   (unsigned long long)disks[i].total_sectors);
         }
         return 0;
     } else if (strcmp(argv[1], "partition") == 0) {
@@ -173,51 +91,103 @@ int main(int argc, char** argv) {
             printf("Error: missing target disk (e.g. /dev/nvme0n1)\n");
             return 1;
         }
-        return installer_partition_disk(argv[2], 0, 8192);
-    } else if (strcmp(argv[1], "format") == 0) {
-        if (argc < 4) {
-            printf("Error: missing partition and fs_type (e.g. /dev/nvme0n1p2 lastfs)\n");
+        u64 swap_mb = (argc >= 4) ? strtoull(argv[3], NULL, 10) : 8192;
+        hw_disk_device_t disk;
+        memset(&disk, 0, sizeof(disk));
+        installer_gpt_create_layout(argv[2], 0, swap_mb, &disk);
+        printf("GPT layout prepared for %s with %u partitions.\n", argv[2], disk.partition_count);
+        return 0;
+    } else if (strcmp(argv[1], "raid-create") == 0) {
+        if (argc < 5) {
+            printf("Usage: last-install raid-create <level:0|1|5|6> <disk1> <disk2> ...\n");
             return 1;
         }
-        return installer_format_partition(argv[2], argv[3]);
+        u32 level = (u32)atoi(argv[2]);
+        const char* members[INSTALLER_MAX_RAID_MEMBERS];
+        u32 count = (u32)(argc - 3);
+        for (u32 i = 0; i < count; i++) members[i] = argv[3 + i];
+        int res = installer_raid_init_array(level, members, count, "md0");
+        if (res == 0) {
+            printf("RAID %u array configured successfully with %u disks.\n", level, count);
+        } else {
+            printf("Error configuring RAID array (code: %d)\n", res);
+        }
+        return res;
+    } else if (strcmp(argv[1], "format") == 0) {
+        if (argc < 4) {
+            printf("Usage: last-install format <partition_path> <fs_type:lastfs|fat32|swap>\n");
+            return 1;
+        }
+        int res = 0;
+        if (strcmp(argv[3], "fat32") == 0 || strcmp(argv[3], "vfat") == 0) {
+            res = installer_fs_format_fat32(argv[2], "EFI-SYSTEM");
+        } else if (strcmp(argv[3], "lastfs") == 0) {
+            res = installer_fs_format_lastfs(argv[2], "LASTOS_ROOT", 0);
+        } else if (strcmp(argv[3], "swap") == 0) {
+            res = installer_fs_format_swap(argv[2]);
+        } else {
+            printf("Unsupported filesystem type '%s'\n", argv[3]);
+            return 1;
+        }
+        printf("Partition %s formatted as %s.\n", argv[2], argv[3]);
+        return res;
+    } else if (strcmp(argv[1], "bootstrap") == 0) {
+        const char* mount_path = (argc >= 3) ? argv[2] : "/mnt/target";
+        snprintf(cfg.root_mount_path, sizeof(cfg.root_mount_path), "%s", mount_path);
+        installer_deploy_rootfs_skeleton(&cfg);
+        installer_deploy_commercial_bundles(&cfg);
+        printf("RootFS skeleton and enterprise bundles deployed on %s.\n", mount_path);
+        return 0;
     } else if (strcmp(argv[1], "set-user") == 0) {
         if (argc < 4) {
-            printf("Usage: last-install set-user <username> <password> [is_admin:0|1]\n");
+            printf("Usage: last-install set-user <username> <password> [is_admin:0|1] [root_mount]\n");
             return 1;
         }
         u8 is_admin = (argc >= 5 && strcmp(argv[4], "1") == 0) ? 1 : 0;
-        int res = installer_configure_user_account(argv[2], argv[3], is_admin, "/mnt/target");
-        if (res == 0) {
-            printf("User '%s' configured successfully.\n", argv[2]);
-        } else {
-            printf("Error configuring user '%s'.\n", argv[2]);
-        }
-        return res;
+        const char* mount_path = (argc >= 6) ? argv[5] : "/mnt/target";
+        installer_crypto_add_user(&cfg, argv[2], argv[3], is_admin, NULL);
+        installer_crypto_write_userdb(&cfg, mount_path);
+        printf("User '%s' (admin: %d) written to UserDB on %s.\n", argv[2], is_admin, mount_path);
+        return 0;
     } else if (strcmp(argv[1], "set-hostname") == 0) {
         if (argc < 3) {
-            printf("Usage: last-install set-hostname <hostname>\n");
+            printf("Usage: last-install set-hostname <hostname> [root_mount]\n");
             return 1;
         }
-        int res = installer_configure_hostname(argv[2], "/mnt/target");
-        if (res == 0) {
-            printf("Hostname set to '%s'.\n", argv[2]);
-        } else {
-            printf("Error setting hostname.\n");
-        }
+        const char* mount_path = (argc >= 4) ? argv[3] : "/mnt/target";
+        installer_configure_hostname(argv[2], mount_path);
+        printf("Hostname '%s' configured on %s.\n", argv[2], mount_path);
+        return 0;
+    } else if (strcmp(argv[1], "unattended") == 0) {
+        printf("Running unattended automated installation on /dev/nvme0n1...\n");
+        installer_crypto_add_user(&cfg, "root", "root", 1, NULL);
+        installer_crypto_add_user(&cfg, "user", "user", 0, NULL);
+        snprintf(cfg.target_disk, sizeof(cfg.target_disk), "/dev/nvme0n1");
+        snprintf(cfg.boot_device, sizeof(cfg.boot_device), "/dev/nvme0n1p1");
+        snprintf(cfg.root_device, sizeof(cfg.root_device), "/dev/nvme0n1p2");
+        snprintf(cfg.swap_device, sizeof(cfg.swap_device), "/dev/nvme0n1p3");
+        snprintf(cfg.net.ifname, sizeof(cfg.net.ifname), "eth0");
+        snprintf(cfg.net.ip_address, sizeof(cfg.net.ip_address), "10.0.2.15/24");
+        snprintf(cfg.net.gateway, sizeof(cfg.net.gateway), "10.0.2.2");
+        snprintf(cfg.net.primary_dns, sizeof(cfg.net.primary_dns), "1.1.1.1");
+        cfg.net.enable_rss_multi_queue = 1;
+        cfg.net.enable_bbrv3 = 1;
+
+        installer_deploy_rootfs_skeleton(&cfg);
+        installer_deploy_commercial_bundles(&cfg);
+        installer_net_generate_configs(&cfg.net, cfg.hostname, cfg.root_mount_path);
+        installer_crypto_write_userdb(&cfg, cfg.root_mount_path);
+        installer_deploy_bootloader(&cfg);
+        int res = installer_verify_preflight(&cfg);
+        printf("Unattended deployment completed with preflight status: %s\n", res == 0 ? "SUCCESS" : "FAILED");
         return res;
     } else if (strcmp(argv[1], "verify") == 0) {
-        installer_config_t cfg;
-        memset(&cfg, 0, sizeof(cfg));
-        strncpy(cfg.target_root_device, "/dev/nvme0n1p2", sizeof(cfg.target_root_device) - 1);
-        strncpy(cfg.boot_device, "/dev/nvme0n1p1", sizeof(cfg.boot_device) - 1);
-        strncpy(cfg.admin_username, "root", sizeof(cfg.admin_username) - 1);
-        strncpy(cfg.net.hostname, "last-server", sizeof(cfg.net.hostname) - 1);
-        int res = installer_run_preflight_check(&cfg);
-        if (res == 0) {
-            printf("Pre-flight check passed 100%% successfully.\n");
-        } else {
-            printf("Pre-flight check failed with code: %d\n", res);
-        }
+        installer_crypto_add_user(&cfg, "root", "root", 1, NULL);
+        snprintf(cfg.target_disk, sizeof(cfg.target_disk), "/dev/nvme0n1");
+        snprintf(cfg.root_device, sizeof(cfg.root_device), "/dev/nvme0n1p2");
+        snprintf(cfg.boot_device, sizeof(cfg.boot_device), "/dev/nvme0n1p1");
+        int res = installer_verify_preflight(&cfg);
+        printf("Verification check: %s\n", res == 0 ? "PASS (100% Validated)" : "FAIL");
         return res;
     }
 

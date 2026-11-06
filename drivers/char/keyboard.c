@@ -170,9 +170,10 @@ static int decode_scancode(u8 scancode, char* out_char) {
         return 0;
     }
 
-    if (scancode == 0x38) {
-        alt_state = 1;
-        return 0;
+    /* Function Keys F1..F8 when Alt is held (Virtual Terminal switching) */
+    if (alt_state && scancode >= 0x3Bu && scancode <= 0x42u) {
+        *out_char = (char)(0x91 + (scancode - 0x3Bu)); /* 0x91 = Alt+F1 .. 0x98 = Alt+F8 */
+        return 1;
     }
 
     char c = shift_state ? keymap_shift[scancode] : keymap[scancode];

@@ -1,9 +1,10 @@
-# Build directories
+# Build directories & output artifacts
 build/
 user/build/
 bootloader/pulse/build/
 rust_kernel/target/
 bin/
+target/
 
 # Compiled objects, binaries & disk images
 *.o
@@ -14,9 +15,49 @@ bin/
 *.iso
 *.img
 *.tmp
+*.qcow2
+*.vmdk
+*.vdi
 
-# Editor & System metadata
+# Logs & Diagnostics
+*.log
+logs/
+*.out
+*.trace
+
+# Screenshots & Images
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.gif
+*.ppm
+*.webp
+*.svg
+screenshots/
+
+# Media Assets & Recordings
+media/
+media_assets/
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.mp4
+*.avi
+*.mkv
+
+# Internal Documentation & Showcases (only code & root README remain)
+docs/
+architecture_showcase/
+*.pdf
+*.docx
+
+# Editor, OS & System metadata
+.vscode/
+.idea/
 .DS_Store
+Thumbs.db
 *~
 *.swp
 *.lock

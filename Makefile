@@ -39,6 +39,7 @@ C_OBJS := \
 	$(BUILD_DIR)/kernel.o \
 	$(BUILD_DIR)/stack_protector.o \
 	$(BUILD_DIR)/core.o \
+	$(BUILD_DIR)/vtty.o \
 	$(BUILD_DIR)/ultimate_kernel.o \
 	$(BUILD_DIR)/kthread.o \
 	$(BUILD_DIR)/gdt.o \
@@ -979,7 +980,7 @@ clean:
 
 TEST_INCLUDES := -iquote include -iquote include/common -iquote include/kernel -iquote include/drivers \
                  -iquote include/fs -iquote include/net -iquote include/mm -iquote include/security \
-                 -iquote include/crypto -iquote include/apk -iquote include/std
+                 -iquote include/crypto -iquote include/apk -iquote include/std -iquote include/storage
 
 test:
 	@echo ">>> [LastKernel] Running native Pulse Loader test matrix..."
@@ -1042,8 +1043,12 @@ test:
 	./$(BUILD_DIR)/tests/laptop_platform_tests
 	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/server_edition_tests tests/server_edition_tests.c kernel/server/numa.c drivers/block/raid_server.c net/server_net.c drivers/platform/ipmi_bmc.c kernel/server/microvm.c kernel/server/server_profile.c
 	./$(BUILD_DIR)/tests/server_edition_tests
-	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/installer_tests tests/installer_tests.c tools/installer/installer_core.c
+	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/installer_tests tests/installer_tests.c tools/installer/gpt_engine.c tools/installer/fs_formatter.c tools/installer/raid_engine.c tools/installer/crypto_engine.c tools/installer/net_engine.c tools/installer/hw_diagnostics.c tools/installer/bundle_deployer.c tools/installer/tui_engine.c tools/installer/installer_core.c
 	./$(BUILD_DIR)/tests/installer_tests
+	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/storage_protocol_tests tests/storage_protocol_tests.c storage/xdr_rpc.c storage/nfs4_server.c storage/smb3_server.c storage/iscsi_target.c storage/storage_manager.c
+	./$(BUILD_DIR)/tests/storage_protocol_tests
+	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/vtty_tests tests/vtty_tests.c kernel/vtty.c
+	./$(BUILD_DIR)/tests/vtty_tests
 	@echo "\n======================================================="
 	@echo "   LastHTTPD Enterprise Rust Web Server & WAF Tests    "
 	@echo "======================================================="
@@ -1052,10 +1057,15 @@ test:
 
 installer:
 	@mkdir -p $(BUILD_DIR)
-	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/last-install tools/installer/last_install.c tools/installer/installer_core.c
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/last-install tools/installer/last_install.c tools/installer/gpt_engine.c tools/installer/fs_formatter.c tools/installer/raid_engine.c tools/installer/crypto_engine.c tools/installer/net_engine.c tools/installer/hw_diagnostics.c tools/installer/bundle_deployer.c tools/installer/tui_engine.c tools/installer/installer_core.c
 	@echo ">>> [LastKernel-Installer] Commercial CLI installer built: $(BUILD_DIR)/last-install"
 
-server-services: installer
+storage:
+	@mkdir -p $(BUILD_DIR)
+	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/last-storage tools/storage/last_storage.c storage/xdr_rpc.c storage/nfs4_server.c storage/smb3_server.c storage/iscsi_target.c storage/storage_manager.c
+	@echo ">>> [LastKernel-Storage] Multi-Protocol Storage Manager built: $(BUILD_DIR)/last-storage"
+
+server-services: installer storage
 	@echo ">>> Building LastHTTPD Enterprise Server Daemon..."
 	cd services/last-httpd && cargo build --release
 	@mkdir -p $(BUILD_DIR)/server_root/conf $(BUILD_DIR)/server_root/public
