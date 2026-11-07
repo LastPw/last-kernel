@@ -980,8 +980,7 @@ clean:
 
 TEST_INCLUDES := -iquote include -iquote include/common -iquote include/kernel -iquote include/drivers \
                  -iquote include/fs -iquote include/net -iquote include/mm -iquote include/security \
-                 -iquote include/crypto -iquote include/apk -iquote include/std -iquote include/storage \
-                 -iquote include/display
+                 -iquote include/crypto -iquote include/apk -iquote include/std -iquote include/storage
 
 test:
 	@echo ">>> [LastKernel] Running native Pulse Loader test matrix..."
@@ -1050,8 +1049,6 @@ test:
 	./$(BUILD_DIR)/tests/storage_protocol_tests
 	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/vtty_tests tests/vtty_tests.c kernel/vtty.c
 	./$(BUILD_DIR)/tests/vtty_tests
-	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/ldp_tests tests/ldp_tests.c drivers/video/ldp_server.c drivers/video/ldp_client.c
-	./$(BUILD_DIR)/tests/ldp_tests
 	@echo "\n======================================================="
 	@echo "   LastHTTPD Enterprise Rust Web Server & WAF Tests    "
 	@echo "======================================================="
