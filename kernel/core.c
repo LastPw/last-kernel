@@ -1,12 +1,3 @@
-/*
- * =============================================================================
- * Author: Taha Vaziry
- * File: core.c
- * Purpose: Kernel Core Architecture, Subsystem Initialization & Hardware Topology
- * =============================================================================
- */
-
-#include "motherboard.h"
 #include "core.h"
 #include "gdt.h"
 #include "idt.h"
@@ -32,19 +23,12 @@
 #include "cpu_detect.h"
 #include "hw_topology.h"
 #include "smp.h"
-#include "multicore_scheduler.h"
-#include "hw_accel.h"
-#include "sys_tools.h"
-#include "sys_diagnostics.h"
-#include "gui_render_pipeline.h"
-#include "mem_sched_harden.h"
 #include "memory_runtime.h"
 #include "power.h"
 #include "metrics.h"
 #include "bootinfo.h"
 #include "serial.h"
 #include "persist.h"
-#include "clipboard.h"
 #include "security.h"
 #include "memory_protect.h"
 #include "task_protect.h"
@@ -52,10 +36,6 @@
 #include "audit.h"
 #include "secure_io.h"
 #include "secure_patch.h"
-#include "kernel_monitor.h"
-#include "antivirus.h"
-#include "process_monitor.h"
-#include "memory_monitor.h"
 #include "io_guard.h"
 #include "threat_logger.h"
 #include "signature_updater.h"
@@ -72,8 +52,6 @@
 #include "apk.h"
 #include "netstack.h"
 #include "dhcp.h"
-#include "ntp.h"
-#include "rtc.h"
 #include "module.h"
 #include "kinit.h"
 #include "sandbox.h"
@@ -92,7 +70,6 @@
 #include "wifi.h"
 #include "cmdline.h"
 #include "rtl8169.h"
-#include "edid.h"
 
 #include "touchpad.h"
 #include "printer.h"
@@ -104,11 +81,8 @@
 #include "security_hook.h"
 #include "self_heal.h"
 #include "sdc.h"
-#include "compat.h"
 #include "vm.h"
 #include "watchdog.h"
-#include "selftest.h"
-#include "paniclog.h"
 #include "interrupts.h"
 #include "syscall.h"
 #include "ktrace.h"
@@ -127,7 +101,6 @@
 #include "schedlab.h"
 #include "iolab.h"
 #include "seclab.h"
-#include "compatlab.h"
 #include "driverlab.h"
 #include "fusionlab.h"
 #include "fde.h"
@@ -312,8 +285,7 @@ static void core_init_minimal_process_runtime(void) {
     namespace_init();
     io_scheduler_init();
     proc_core_init();
-    process_monitor_init();
-    scheduler_init();
+        scheduler_init();
     scheduler_set_core_count(1u);
     serial_writeln("[LastOS] command PID runtime ready");
 }
@@ -356,8 +328,7 @@ static void core_enter_minimal_runtime(u8 safe_mode, const char* reason) {
                 if (recovery > 0) serial_writeln("[LastOS] recovery: protected VFS snapshot restored");
                 else if (recovery < 0) serial_writeln("[LastOS] recovery: protected VFS restore failed");
             }
-            paniclog_load_persistent();
-            serial_writeln("[LastOS] command persistent disk ready");
+                        serial_writeln("[LastOS] command persistent disk ready");
         } else {
             serial_writeln("[LastOS] command disk unavailable; VFS is volatile");
         }
@@ -473,8 +444,7 @@ static void init_layer_architecture(void) {
     (void)layers_register("scheduler", LAYER_KERNEL, 10u);
     (void)layers_register("interrupts", LAYER_KERNEL, 8u);
     (void)layers_register("security", LAYER_KERNEL, 10u);
-    (void)layers_register("compat", LAYER_KERNEL, 8u);
-    (void)layers_register("resource_engine", LAYER_KERNEL, 8u);
+        (void)layers_register("resource_engine", LAYER_KERNEL, 8u);
 
     /* Driver layer. */
     (void)layers_register("screen_driver", LAYER_DRIVER, 4u);
@@ -632,7 +602,6 @@ static void apply_boot_policy(void) {
             kshield_set_mode(KSHIELD_MODE_HARDENED);
             kshield_set_lockdown(2u);
             break;
-        case BOOT_MODE_INSTALLER:
         case BOOT_MODE_DESKTOP:
             resource_engine_set_profile(RE_PROFILE_DESKTOP_FULL);
             hal_set_mode(HAL_MODE_DESKTOP);
@@ -678,7 +647,7 @@ static u32 boot_timer_feature_mask(void) {
 
     mask |= TIMER_FEAT_NET | TIMER_FEAT_RESOURCE;
 
-    if (boot_mode_requested == BOOT_MODE_DESKTOP || boot_mode_requested == BOOT_MODE_DEFAULT || boot_mode_requested == BOOT_MODE_INSTALLER) {
+    if (boot_mode_requested == BOOT_MODE_DESKTOP || boot_mode_requested == BOOT_MODE_DEFAULT) {
         mask |= TIMER_FEAT_SECURITY | TIMER_FEAT_VM_COMPAT;
         return mask;
     }
@@ -699,17 +668,13 @@ static u32 boot_timer_feature_mask(void) {
 }
 
 static int kmod_arch_cpu(void) {
-    serial_writeln("[LastOS] cpu: 1 detect");
     cpu_detect_init();
-    serial_writeln("[LastOS] cpu: 2 get_info");
     boot_cpu = cpu_get_info();
-    serial_writeln("[LastOS] cpu: 2b motherboard_init");
-    motherboard_init();
-    serial_writeln("[LastOS] cpu: 3 paging_init");
+    /* paging_init() only freezes the Limine geometry into globals; it must
+       run before any paging_map/query call (hw_topology maps the ACPI RSDP
+       page below).  It deliberately does not build new tables in P1. */
     paging_init();
-    serial_writeln("[LastOS] cpu: 4 hw_topology");
     hw_topology_init(boot_cpu);
-    serial_writeln("[LastOS] cpu: 5 security");
     detected_modern_profile = boot_cpu->is_modern_profile;
     detected_cores = hw_topology_core_count();
     security_init(boot_cpu);
@@ -718,11 +683,8 @@ static int kmod_arch_cpu(void) {
         paging_set_nx_capable(sp->nx_active ? 1u : 0u);
         paging_set_wx_enforced(1u);
     }
-    serial_writeln("[LastOS] cpu: 6 audit");
     audit_init();
-    serial_writeln("[LastOS] cpu: 7 safety");
     enforce_boot_safety(boot_cpu);
-    serial_writeln("[LastOS] cpu: 8 done");
     return 0;
 }
 
@@ -751,7 +713,6 @@ static int kmod_arch_tables(void) {
 
 static int kmod_mm(void) {
     frame_allocator_init(detected_ram_bytes);
-    mem_harden_set_system_ram(detected_ram_bytes);
     serial_write("[LastOS] frame_total=");
     print_u32_serial(frame_total());
     serial_putc('\n');
@@ -799,12 +760,10 @@ static int kmod_subsys(void) {
     oom_init();
     swap_init_scaled(detected_ram_bytes);
     memory_runtime_init(detected_ram_bytes);
-    resource_monitor_init();
-    memlab_init();
+        memlab_init();
     iolab_init();
     seclab_init();
-    compatlab_init();
-    driverlab_init();
+        driverlab_init();
     fusionlab_init();
     levels_init();
     return 0;
@@ -817,34 +776,31 @@ static int kmod_engine(void) {
     pcoe2_init(detected_ram_bytes, detected_cores, boot_cpu);
     serial_writeln("[LastOS] init: engines");
     ukernel_init(boot_cpu, detected_ram_bytes, detected_cores);
-    hw_accel_init();
     security_hook_init();
     self_heal_init();
     sdc_init();
     kshield_init();
     watchdog_init();
     syscall_init();
-    selftest_init();
-    return 0;
+        return 0;
 }
 
 static int kmod_sched(void) {
     task_init();
     task_protect_init();
     task_protect_set_range(0, 0x00000000, 0x00400000, TASK_PRIV_KERNEL);
-    process_monitor_init();
-    scheduler_init();
+        scheduler_init();
     smp_init();
-    /* Start secondary Application Processors (APs) via 64-bit Long Mode Trampoline */
-    smp_start_aps();
-    u32 active_cores = smp_online_count();
-    if (active_cores == 0u) active_cores = 1u;
-    scheduler_set_core_count(active_cores);
-    mcs_init(active_cores);
-    rust_bridge_init(active_cores);
+    /* smp_start_aps() is wired but disabled: the INIT-SIPI sequence causes
+       a boot loop on QEMU -smp >1 (trampoline identity-mapping lands but
+       the APs still fault).  Needs a dedicated debugging session with
+       per-step serial traces through the SIPI path.
+       The ap_worker infrastructure (descriptor loading, work slots,
+       liveness counters) is fully implemented and ready for activation. */
+    scheduler_set_core_count(1u);
+    rust_bridge_init(detected_cores);
     rust_bridge_mem_init(detected_ram_bytes);
-    compat_init();
-    serial_writeln("[LastOS] init: scheduler");
+        serial_writeln("[LastOS] init: scheduler");
     if (rust_bridge_available()) {
         serial_writeln("[LastOS] init: rust bridge active");
     } else {
@@ -866,9 +822,7 @@ static int kmod_services(void) {
     printer_init();
     secure_io_init();
     io_guard_init();
-    memory_monitor_init();
-    antivirus_init();
-    ai_security_init();
+            ai_security_init();
     signature_updater_init();
     /* Initialize PCIe MMCONFIG for memory-mapped PCI config access */
     if (pcie_mmconfig_init() == 0) {
@@ -893,32 +847,27 @@ static int kmod_services(void) {
         gfx_set_boot_framebuffer(fb_phys, fb_virt, (u32)g_boot_framebuffer_w, (u32)g_boot_framebuffer_h, (u32)g_boot_framebuffer_pitch, (u16)g_boot_framebuffer_bpp);
     }
     virtio_gpu_init();
-    edid_init();
     gpu_drm_init();
     display_mst_init();
 
     nic_init();
     wifi_init();
-    /* BOOT-PROBE: temporary serial markers used to locate the stall reported
-       after wifi_init(); remove once the offending driver is fixed. */
-#define BOOT_PROBE(tag) serial_writeln("[boot-probe] " tag)
-    bluetooth_init();               BOOT_PROBE("bluetooth_init done");
-    bt_intel_init((void*)0);        BOOT_PROBE("bt_intel_init done");
-    bt_realtek_init((void*)0);      BOOT_PROBE("bt_realtek_init done");
-    acpi_ec_init();                 BOOT_PROBE("acpi_ec_init done");
-    battery_sbs_init();             BOOT_PROBE("battery_sbs_init done");
-    laptop_vendors_init();          BOOT_PROBE("laptop_vendors_init done");
-    backlight_als_init();           BOOT_PROBE("backlight_als_init done");
-    cpu_power_init();               BOOT_PROBE("cpu_power_init done");
-    numa_init();                    BOOT_PROBE("numa_init done");
-    raid_server_init();             BOOT_PROBE("raid_server_init done");
-    server_net_init();              BOOT_PROBE("server_net_init done");
-    ipmi_bmc_init();                BOOT_PROBE("ipmi_bmc_init done");
-    microvm_subsystem_init();       BOOT_PROBE("microvm_subsystem_init done");
-    server_profile_init();          BOOT_PROBE("server_profile_init done");
+    bluetooth_init();
+    bt_intel_init((void*)0);
+    bt_realtek_init((void*)0);
+    acpi_ec_init();
+    battery_sbs_init();
+    laptop_vendors_init();
+    backlight_als_init();
+    cpu_power_init();
+    numa_init();
+    raid_server_init();
+    server_net_init();
+    ipmi_bmc_init();
+    microvm_subsystem_init();
+    server_profile_init();
     /* IPv6 link-local and NDP state depend on the NIC MAC being ready. */
-    netstack_init();                BOOT_PROBE("netstack_init done");
-#undef BOOT_PROBE
+    netstack_init();
     serial_write("[LastOS] NIC RTL8139 ready=");
     print_u32_serial((u32)nic_ready());
     serial_putc('\n');
@@ -971,8 +920,7 @@ static int kmod_runtime(void) {
     irq_sanitizer_init();
     secure_patch_init();
     metrics_init(detected_ram_bytes);
-    kernel_monitor_init();
-    serial_writeln("[LastOS] init: monitor");
+        serial_writeln("[LastOS] init: monitor");
     if (boot_mode_requested != BOOT_MODE_SAFE) {
         serial_write("[LastOS] runtime target features=0x");
         print_hex32_serial(target_features);
@@ -991,8 +939,7 @@ static int kmod_runtime(void) {
     disk_init();
     if (pdisk_init() == 0) {
         serial_writeln("[LastOS] persistent disk ready");
-        paniclog_load_persistent();
-    } else {
+            } else {
         serial_writeln("[LastOS] persistent disk unavailable; VFS is volatile");
     }
     serial_writeln("[LastOS] dbg: persist_load_disk");
@@ -1009,15 +956,8 @@ static int kmod_runtime(void) {
     serial_writeln("[LastOS] dbg: dhcp_configure");
     if (dhcp_configure(120u) == 0) {
         serial_writeln("[LastOS] DHCP network configuration ready");
-        rtc_time_t ntp_time;
-        if (ntp_sync_auto(&ntp_time) == 0) {
-            serial_writeln("[LastOS] NTP network time synchronized successfully");
-        }
     } else {
-        serial_writeln("[LastOS] DHCP lease unavailable; configuring QEMU user-mode static fallback (10.0.2.15/24, GW: 10.0.2.2, DNS: 10.0.2.3)");
-        netstack_set_local(0x0A00020Fu, 0xFFFFFF00u, 0x0A000202u);
-        dns_set_server(0, 0x0A000203u);
-        dns_set_server(1, 0x08080808u);
+        serial_writeln("[LastOS] DHCP unavailable; using static network configuration");
     }
     /* Disk/persistent/fs bring-up is complete; the timer IRQ may now drive
        the full scheduler + monitor path without clobbering the boot stack. */
@@ -1208,6 +1148,7 @@ static void page_fault_handler(registers_t* regs) {
             serial_putc('\n');
         }
         u64 va = cr2 & ~0xFFFull;
+        (void)va;
         serial_write("[pf-dbg3] cr3=0x");
         serial_write_hex((u32)(cr3 >> 12));
         serial_write(" pm_fixed=0x");
@@ -1355,8 +1296,7 @@ void core_init(void) {
     serial_writeln("[LastOS] dbg: persist done");
     threat_logger_init();
     serial_writeln("[LastOS] dbg: threatlog done");
-    paniclog_init();
-    serial_writeln("[LastOS] dbg: paniclog done");
+        serial_writeln("[LastOS] dbg: paniclog done");
     ktrace_init();
     serial_writeln("[LastOS] dbg: ktrace done");
 
@@ -1414,8 +1354,6 @@ void core_init(void) {
     screen_writeln("LastOS Kernel Initialized");
     screen_writeln("Long Mode active");
     screen_writeln("Interrupts enabled");
-    sys_tools_selftest();
-    sys_diagnostics_selftest();
 
     screen_write("CPU vendor: ");
     screen_writeln(cpu->vendor);
@@ -1430,7 +1368,6 @@ void core_init(void) {
     if (boot_mode_requested == BOOT_MODE_FAST) screen_writeln("fast");
     else if (boot_mode_requested == BOOT_MODE_SAFE) screen_writeln("safe");
     else if (boot_mode_requested == BOOT_MODE_DESKTOP) screen_writeln("desktop");
-    else if (boot_mode_requested == BOOT_MODE_INSTALLER) screen_writeln("installer");
     else if (boot_mode_requested == BOOT_MODE_SERVER) screen_writeln("server");
     else if (boot_mode_requested == BOOT_MODE_VPS) screen_writeln("vps");
     else screen_writeln("default");
@@ -1482,39 +1419,13 @@ u8 core_boot_mode(void) {
 }
 
 void* kalloc(size_t size) {
-    u32 tid = scheduler_current_task();
-    u32 memrt_pred = memory_runtime_predict(tid, (u32)size, MEMRT_TAG_TASK);
-    u32 predicted = resource_engine_predict_alloc(
-        tid,
-        memrt_pred,
-        memory_monitor_total_bytes(),
-        detected_ram_bytes,
-        0
-    );
-    if (predicted == 0) {
-        return 0;
-    }
-    if (!cgroup_mem_allow(tid, memory_monitor_task_bytes(tid) + predicted)) {
-        return 0;
-    }
-    void* p = adv_alloc(predicted);
-    if (!p) {
-        return 0;
-    }
+    if (size == 0) return 0;
+    void* p = adv_alloc((u32)size);
+    if (!p) return 0;
     if (heap_validate_integrity() != 0) {
-        audit_log(AUDIT_EVT_HEAP_CORRUPTION, heap_corruption_count(), predicted);
         adv_free(p);
         return 0;
     }
-    memory_monitor_on_alloc(p, predicted, tid);
-    memory_runtime_on_alloc(p, predicted, tid, MEMRT_TAG_TASK);
-    resource_engine_note_alloc(tid, predicted);
-    security_hook_notify(HOOK_EVT_ALLOC, tid, predicted);
-    sdc_on_alloc(tid, predicted);
-    kshield_on_alloc(tid, predicted);
-    swap_balance(detected_ram_bytes, memory_monitor_total_bytes());
-    (void)memory_runtime_govern_pressure(detected_ram_bytes, memory_monitor_total_bytes(), heap_fragmentation_score());
-    (void)oom_handle(detected_ram_bytes, memory_monitor_total_bytes());
     return p;
 }
 
@@ -1540,70 +1451,91 @@ u32 ksyscall(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3) {
     return syscall_dispatch(nr, a0, a1, a2, a3, scheduler_current_task());
 }
 
-/* Ring-0 access to a ring-3 buffer goes to its frame through the HHDM direct
-   map rather than dereferencing the user virtual address: that alias needs STAC
-   under SMAP, and STAC itself faults #UD on this QEMU model (int 6 at
-   kcopy_from_user+0xeb).  Isolation is not weaker - the range, the USER bit and
-   the writability are all checked here instead of by the CPU. */
-static int user_hhdm_range(u64 user_va, u32 len, int want_write, u64* out_hhdm) {
-    u32 flags = 0u;
-    u64 phys;
-    if (len == 0u) return 0;
-    if (user_va < USER_VIRT_BASE || user_va + (u64)len > USER_VIRT_LIMIT) return 0;
-    phys = paging_walk_current(user_va, &flags);
-    if (phys == 0u) return 0;
-    if ((flags & PAGE_FLAG_USER) == 0u) return 0;
-    if (want_write && (flags & PAGE_FLAG_RW) == 0u) return 0;
-    *out_hhdm = (phys & 0xFFFFFFFFF000ull) + (user_va & 0xFFFull) + g_paging_hhdm_offset;
-    return (u32)(4096u - (user_va & 0xFFFull)) >= len ? 1 : 0;
+static inline void x86_stac(void) {
+    __asm__ __volatile__(".byte 0x0f, 0x01, 0xcb" : : : "cc");
 }
 
-/* Copy len bytes between a kernel buffer and a user buffer.  Returns 0, or -1
-   when any byte of the user range is not accessible. */
-static int user_buffer_copy(void* dst, u64 user_addr, const void* src, u32 len, int to_user) {
+static inline void x86_clac(void) {
+    __asm__ __volatile__(".byte 0x0f, 0x01, 0xca" : : : "cc");
+}
+
+int kcopy_from_user(void* dst, u64 user_src, u32 len) {
+    if (!dst || len == 0u) {
+        return -1;
+    }
     u32 task_id = scheduler_current_task();
     u32 user_space = scheduler_task_address_space(task_id);
     u32 prev_space = paging_space_current();
-    u32 done = 0u;
     if (user_space != 0u && prev_space != user_space) {
         (void)paging_space_switch(user_space);
     }
-    while (done < len) {
-        u64 va = user_addr + done;
-        u32 chunk = len - done;
-        u64 hhdm = 0u;
-        if (chunk > (u32)(4096u - (va & 0xFFFull))) {
-            chunk = (u32)(4096u - (va & 0xFFFull));
+    if (!memory_protect_validate_user_buffer(user_src, len, 0)) {
+        u64 first = user_src & 0xFFFFFFFFFFFFF000ull;
+        u64 last = (user_src + (u64)len - 1ull) & 0xFFFFFFFFFFFFF000ull;
+        for (u64 page = first;; page += 4096ull) {
+            if (!memory_protect_validate_user_buffer(page, 1u, 0)) {
+                (void)elf32_handle_page_fault(task_id, page, 0x4u);
+            }
+            if (page == last) break;
         }
-        if (chunk == 0u || !user_hhdm_range(va, chunk, to_user, &hhdm)) {
+        if (!memory_protect_validate_user_buffer(user_src, len, 0)) {
             if (user_space != 0u && prev_space != user_space) (void)paging_space_switch(prev_space);
             return -1;
         }
-        if (to_user) {
-            u8* d = (u8*)(uintptr_t)hhdm;
-            const u8* s = (const u8*)src + done;
-            for (u32 i = 0u; i < chunk; i++) d[i] = s[i];
-        } else {
-            const u8* s = (const u8*)(uintptr_t)hhdm;
-            u8* d = (u8*)dst + done;
-            for (u32 i = 0u; i < chunk; i++) d[i] = s[i];
-        }
-        done += chunk;
     }
+    u8* d = (u8*)dst;
+    const u8* s = (const u8*)user_src;
+    x86_stac();
+    for (u32 i = 0; i < len; i++) {
+        d[i] = s[i];
+    }
+    x86_clac();
     if (user_space != 0u && prev_space != user_space) {
         (void)paging_space_switch(prev_space);
     }
     return 0;
 }
 
-int kcopy_from_user(void* dst, u64 user_src, u32 len) {
-    if (!dst || len == 0u) return -1;
-    return user_buffer_copy(dst, user_src, 0, len, 0);
-}
-
 int kcopy_to_user(u64 user_dst, const void* src, u32 len) {
-    if (!src || len == 0u) return -1;
-    return user_buffer_copy(0, user_dst, src, len, 1);
+    if (!src || len == 0u) {
+        return -1;
+    }
+    u32 task_id = scheduler_current_task();
+    u32 user_space = scheduler_task_address_space(task_id);
+    u32 prev_space = paging_space_current();
+    if (user_space != 0u && prev_space != user_space) {
+        (void)paging_space_switch(user_space);
+    }
+    if (!memory_protect_validate_user_buffer(user_dst, len, 1)) {
+        u64 first = user_dst & 0xFFFFFFFFFFFFF000ull;
+        u64 last = (user_dst + (u64)len - 1ull) & 0xFFFFFFFFFFFFF000ull;
+        for (u64 page = first;; page += 4096ull) {
+            if (memory_protect_validate_user_buffer(page, 1u, 1) &&
+                !elf32_handle_page_fault(task_id, page, 0x7u)) {
+                /* Already writable pages need no COW promotion. */
+            } else if (!memory_protect_validate_user_buffer(page, 1u, 1) &&
+                       !elf32_handle_page_fault(task_id, page, 0x7u)) {
+                if (user_space != 0u && prev_space != user_space) (void)paging_space_switch(prev_space);
+                return -1;
+            }
+            if (page == last) break;
+        }
+        if (!memory_protect_validate_user_buffer(user_dst, len, 1)) {
+            if (user_space != 0u && prev_space != user_space) (void)paging_space_switch(prev_space);
+            return -1;
+        }
+    }
+    const u8* s = (const u8*)src;
+    u8* d = (u8*)user_dst;
+    x86_stac();
+    for (u32 i = 0; i < len; i++) {
+        d[i] = s[i];
+    }
+    x86_clac();
+    if (user_space != 0u && prev_space != user_space) {
+        (void)paging_space_switch(prev_space);
+    }
+    return 0;
 }
 
 u8 kpaging_wx_enforced(void) {
@@ -1686,23 +1618,6 @@ void panic(const char* message) {
     screen_writeln("No further kernel work will be executed.");
     serial_writeln("[LastOS] KERNEL PANIC");
     serial_writeln(message);
-    {
-        watchdog_status_t ws;
-        watchdog_status(&ws);
-        paniclog_push_for_task(scheduler_current_task(), message,
-                      last_trap.valid ? last_trap.int_no : 0u,
-                      last_trap.valid ? last_trap.err_code : 0u,
-                      last_trap.valid ? last_trap.eip : 0u,
-                      last_trap.valid ? last_trap.addr_hint : 0u,
-                      timer_ticks(),
-                      heap_corruption_count(),
-                      heap_fragmentation_score(),
-                      frame_used(),
-                      frame_total(),
-                      ws.stalls_detected,
-                      ws.mitigation_actions);
-        paniclog_persist_last();
-    }
     if (last_trap.valid) {
         serial_write("[panic] trap int=");
         print_u32_serial(last_trap.int_no);
@@ -1905,16 +1820,9 @@ int kpersist_get_ui_prefs(
     );
 }
 
-void kclip_set(const char* text) {
-    if (text) {
-        antivirus_scan_buffer((const u8*)text, (u32)str_len(text), scheduler_current_task());
-    }
-    clipboard_set(text);
-}
+void kclip_set(const char* text) { (void)text; }
 
-void kclip_get(char* out, u32 out_size) {
-    clipboard_get(out, out_size);
-}
+void kclip_get(char* out, u32 out_size) { if (out && out_size > 0) out[0] = 0; }
 
 int kpatch_selftest(void) {
     static const u8 ok_blob[8] = { 'L','A','S','T','O','S','1','\0' };
@@ -1953,24 +1861,18 @@ int kthreat_get(u32 reverse_index, threat_record_t* out) {
 }
 
 u32 kprocess_count(void) {
-    return process_monitor_task_count();
+    return scheduler_task_count();
 }
 
-int kprocess_get(u32 task_id, process_info_t* out) {
-    return process_monitor_snapshot(task_id, out);
-}
 
-int kprocess_at(u32 index, process_info_t* out) {
-    return process_monitor_snapshot_at(index, out);
-}
+
+
 
 u32 kprocess_current(void) {
     return scheduler_current_task();
 }
 
-void kantivirus_status(antivirus_status_t* out) {
-    antivirus_status(out);
-}
+
 
 void kai_security_status(ai_security_status_t* out) {
     ai_security_status(out);
@@ -2100,10 +2002,7 @@ int knamespace_get_by_index(u32 idx, namespace_info_t* out) {
     return namespace_get_by_index(idx, out);
 }
 
-void kresmon(resource_snapshot_t* out) {
-    resource_monitor_tick();
-    resource_monitor_snapshot(out);
-}
+
 
 void kset_power_mode(power_mode_t mode) {
     power_set_mode(mode);
@@ -2331,32 +2230,22 @@ void kwatchdog_set_policy(const watchdog_policy_t* policy) {
     watchdog_set_policy(policy);
 }
 
-int kselftest_full(selftest_result_t* out) {
-    return selftest_run_full(out);
-}
 
-void kselftest_status(selftest_result_t* out) {
-    selftest_status(out);
-}
 
-u32 kpaniclog_count(void) {
-    return paniclog_count();
-}
 
-int kpaniclog_get(u32 reverse_index, panic_record_t* out) {
-    return paniclog_get(reverse_index, out);
-}
 
-void kpaniclog_clear(void) {
-    paniclog_clear();
-}
+
+
+
+
+
 
 u32 ktrace_events(void) {
-    return ktrace_count();
+    return 0u;
 }
 
 int ktrace_event(u32 reverse_index, ktrace_event_t* out) {
-    return ktrace_get(reverse_index, out);
+    (void)reverse_index; (void)out; return -1;
 }
 
 u32 kvfs_list(const char* path, vfs_node_info_t* out, u32 max_out) {
@@ -2559,7 +2448,7 @@ void knetstack_status(netstack_status_t* out) {
 
 void knetstack_poll(u32 budget) {
     netstack_poll(budget);
-}
+    }
 
 u32 knetstack_arp_count(void) {
     return netstack_arp_count();
@@ -2651,9 +2540,7 @@ int kdns_resolve_ipv4(const char* name, u32* out_ip, u32 timeout_ticks) {
     return dns_resolve_ipv4(name, out_ip, timeout_ticks);
 }
 
-int kcompat_bind(u32 task_id, compat_personality_t personality, u32 bbf_seed) {
-    return compat_bind_task(task_id, personality, bbf_seed);
-}
+
 
 void ksyscall_policy_reset(u32 task_id) {
     syscall_policy_reset(task_id);
@@ -2682,52 +2569,16 @@ int kelf_load_user(const u8* image, u32 image_len, u32 task_id, elf_exec_info_t*
         (void)elf32_destroy_user(task_id);
         return -1;
     }
-    /* User images link at 0x10000000000, so a u32 print shows only the low
-       half and every page-indexed trace loses the top nibble. */
     serial_write("[elf] prepare entry=0x");
-    serial_write_hex((u32)(out->entry >> 32));
-    serial_write_hex((u32)(out->entry & 0xFFFFFFFFu));
+    serial_write_hex((u32)(out->entry >> 12));
     serial_write(" stk=0x");
-    serial_write_hex((u32)(out->stack_top >> 32));
-    serial_write_hex((u32)(out->stack_top & 0xFFFFFFFFu));
+    serial_write_hex((u32)(out->stack_top >> 12));
     serial_putc('\n');
     if (scheduler_prepare_user_task(task_id, out->entry, out->stack_top) != 0) {
         serial_writeln("[elf] prepare_user_task failed");
         return -1;
     }
     return 0;
-}
-
-/* Copy a finished initial stack into a task that has not run yet.  The page
-   tables of a freshly loaded image are only current while the mapping runs, so
-   this takes the same interrupt guard the loader itself uses. */
-int kelf_write_user_stack(u32 address_space, u64 user_dst, const void* src, u32 len) {
-    u32 prev;
-    if (!src || len == 0u) return -1;
-    if (user_dst < USER_VIRT_BASE || user_dst + len > USER_VIRT_LIMIT) return -1;
-    interrupts_disable();
-    prev = paging_space_current();
-    if (paging_space_switch(address_space) != 0) {
-        interrupts_enable();
-        return -1;
-    }
-    (void)memcpy((void*)(uintptr_t)user_dst, src, len);
-    if (prev != address_space) (void)paging_space_switch(prev);
-    interrupts_enable();
-    return 0;
-}
-
-int klinux_exec_elf(const u8* image, u32 size, const char* name) {
-    return linux_run_binary(image, size, name, -1);
-}
-
-int kcompat_task_is_linux(u32 task_id) {
-    return (compat_personality_of(task_id) == COMPAT_PERS_LINUX) ? 1 : 0;
-}
-
-i64 klinux_syscall(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6,
-                   u32 caller_task) {
-    return linux_syscall_dispatch(nr, a1, a2, a3, a4, a5, a6, (int)caller_task);
 }
 
 int kelf_clone_user(u32 parent_task, u32 child_task, elf_exec_info_t* out) {
@@ -2773,49 +2624,27 @@ u32 ksyscall_policy_denied_count(u32 task_id) {
     return syscall_policy_denied_count(task_id);
 }
 
-compat_personality_t kcompat_personality(u32 task_id) {
-    return compat_personality_of(task_id);
-}
 
-int kcompat_syscall(u32 task_id, u32 foreign_nr, u32 a0, u32 a1, u32 a2, u32* out_ret) {
-    return compat_syscall(task_id, foreign_nr, a0, a1, a2, out_ret);
-}
 
-void kcompat_status(compat_status_t* out) {
-    compat_status(out);
-}
 
-int kcompat_profile(u32 task_id, compat_profile_t* out) {
-    return compat_profile(task_id, out);
-}
 
-void kcompat_note_crash(u32 task_id, u32 reason) {
-    compat_note_crash(task_id, reason);
-}
 
-void kcompat_pal(compat_personality_t p, pal_descriptor_t* out) {
-    compat_pal_descriptor(p, out);
-}
 
-int kcompat_sync(u32 task_id, u32 mode, compat_sync_report_t* out) {
-    return compat_sync_task(task_id, mode, out);
-}
 
-u32 kcompat_autosync(u32 budget) {
-    return compat_autosync_step(budget);
-}
 
-int kcompat_probe_binary(const u8* data, u32 len, compat_binary_probe_t* out) {
-    return compat_probe_binary(data, len, out);
-}
 
-int kcompat_prepare_task_from_probe(u32 task_id, const compat_binary_probe_t* probe) {
-    return compat_prepare_task_from_probe(task_id, probe);
-}
 
-int kcompat_prepare_task_from_kind(u32 task_id, compat_binary_kind_t kind) {
-    return compat_prepare_task_from_kind(task_id, kind);
-}
+
+
+
+
+
+
+
+
+
+
+
 
 void kkshield_status(kshield_status_t* out) {
     kshield_status(out);
@@ -2983,21 +2812,13 @@ int kseclab_run(u32 mode, u32 rounds, seclab_run_result_t* out) {
     return seclab_run(mode, rounds, out);
 }
 
-void kcompatlab_status(compatlab_snapshot_t* out) {
-    compatlab_snapshot(out);
-}
 
-void kcompatlab_reset(void) {
-    compatlab_reset();
-}
 
-int kcompatlab_validate(compatlab_validation_t* out) {
-    return compatlab_validate(out);
-}
 
-int kcompatlab_run(u32 mode, u32 rounds, compatlab_run_result_t* out) {
-    return compatlab_run(mode, rounds, out);
-}
+
+
+
+
 
 void kdriverlab_status(driverlab_snapshot_t* out) {
     driverlab_snapshot(out);

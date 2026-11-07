@@ -61,3 +61,8 @@ Thumbs.db
 *~
 *.swp
 *.lock
+
+# Agent & IDE caches
+.gemini/
+*.exe
+

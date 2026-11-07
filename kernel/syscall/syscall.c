@@ -30,16 +30,8 @@
 #include "hpet.h"
 #include "timer.h"
 #include "kshield.h"
-#include "hdaudio.h"
-#include "wifi.h"
-#include "power.h"
-#include "drivers/laptop_platform.h"
-#include "vfs.h"
-#include "telemetry.h"
-#include "ring3_harden.h"
 #include "serial.h"
 
-#include "../security/ring3_harden.inc"
 
 #define PIPE_MAX 64u
 #define PIPE_CAPACITY 4096u
@@ -65,26 +57,6 @@ static u32 g_gfx_blits_presented = 0u;
 static spinlock_t g_gfx_lock;
 static spinlock_t g_pipe_lock;
 
-#define IOCP_MAX_PORTS  16u
-#define IOCP_QUEUE_SIZE 64u
-
-typedef struct {
-    u32 bytes_transferred;
-    u64 completion_key;
-    u64 overlapped_ptr;
-} iocp_event_t;
-
-typedef struct {
-    u8 used;
-    u32 owner_task;
-    u32 head;
-    u32 tail;
-    u32 count;
-    iocp_event_t events[IOCP_QUEUE_SIZE];
-} iocp_port_t;
-
-static iocp_port_t g_iocp_ports[IOCP_MAX_PORTS];
-static spinlock_t g_iocp_lock;
 
 static int gfx_claim(u32 task_id) {
     /* SECURITY: spinlock prevents TOCTOU race on SMP where two CPUs
@@ -123,7 +95,6 @@ static int pipe_access_allowed(const syscall_pipe_t* pipe, u32 task_id) {
 void syscall_release_task(u32 task_id) {
     kfile_release_task(task_id);
     knetstack_socket_release_task(task_id);
-    kshield_release_task(task_id);
     for (u32 i = 0u; i < PIPE_MAX; i++) {
         if (g_pipes[i].used && g_pipes[i].owner_task == task_id) {
             memset(&g_pipes[i], 0, sizeof(g_pipes[i]));
@@ -227,9 +198,6 @@ u32 syscall_policy_denied_count(u32 task_id) {
 
 static int copy_user_str(u64 user_ptr, char* out, u32 max_len) {
     if (!out || max_len == 0u || user_ptr == 0u) return -1;
-    /* Ring 3 Hardening: Enforce canonical user bounds and trap null pointers */
-    u32 cur_task = scheduler_current_task();
-    if (ring3_validate_str(user_ptr, max_len, cur_task) != 0) return -1;
     for (u32 i = 0; i < max_len; i++) {
         u8 ch = 0u;
         if (kcopy_from_user(&ch, user_ptr + i, 1u) != 0) {
@@ -261,11 +229,6 @@ void syscall_init(void) {
     spinlock_init(&g_exec_lock);
     spinlock_init(&g_gfx_lock);
     spinlock_init(&g_pipe_lock);
-    memset(g_iocp_ports, 0, sizeof(g_iocp_ports));
-    spinlock_init(&g_iocp_lock);
-    /* Ring 3 Hardening: Initialize userspace defenses and execute verification suite */
-    ring3_hardening_init();
-    (void)ring3_hardening_selftest();
 }
 
 u32 syscall_version(void) {
@@ -291,11 +254,6 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
     }
     g_syscall_count++;
     ktrace_push(KTRACE_EVT_SYSCALL, 0u, caller_task, nr, a0);
-
-    /* Ring 3 Hardening: Syscall Flooding & DoS Rate Limiter */
-    if (ring3_record_syscall_rate(caller_task)) {
-        return (u32)-1;
-    }
 
     if (!syscall_policy_allowed(caller_task, nr)) {
         int slot = policy_slot(caller_task, 1);
@@ -332,7 +290,7 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
                 return 0u;
             }
             if (scheduler_task_is_user(caller_task)) return elf32_user_alloc(caller_task, a0);
-            return (u32)kalloc((size_t)a0);
+            return (u32)(uintptr_t)kalloc((size_t)a0);
         }
 
         case KSYSCALL_FREE: {
@@ -353,13 +311,8 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
             return 0u;
         }
 
-        case KSYSCALL_COMPAT_CALL: {
-            u32 out = 0u;
-            if (kcompat_syscall(caller_task, a0, a1, a2, a3, &out) != 0) {
-                return (u32)-1;
-            }
-            return out;
-        }
+        case KSYSCALL_COMPAT_CALL:
+            return (u32)-1;
 
         case KSYSCALL_GET_TASK_ID:
             return caller_task;
@@ -382,11 +335,6 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
         case KSYSCALL_OPEN: {
             char path[VFS_PATH_MAX];
             u32 fd = 0u;
-            /* Ring 3 Hardening: Validate path string pointer before copy */
-            if (ring3_validate_str(a0, sizeof(path), caller_task) != 0) {
-                g_syscall_faults++;
-                return (u32)-1;
-            }
             if (syscall_copy_path(a0, path, sizeof(path)) != 0 ||
                 kfile_open_for_task(path, a1, &fd, caller_task) != 0) {
                 g_syscall_faults++;
@@ -403,8 +351,6 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
              * exhaustion from large VFS_FILE_MAX values. */
             u8 buf[1024];
             u32 len = a2 > sizeof(buf) ? sizeof(buf) : a2;
-            /* Ring 3 Hardening: Prevent kernel memory overwrite via invalid user_dst pointer */
-            if (ring3_validate_ptr(a1, len, 1, caller_task) != 0) return (u32)-1;
             int n = kfile_read_for_task(a0, buf, len, caller_task);
             if (n < 0 || (n > 0 && kcopy_to_user(a1, buf, (u32)n) != 0)) return (u32)-1;
             return (u32)n;
@@ -414,8 +360,7 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
             u8 buf[1024];
             u32 len = a2 > sizeof(buf) ? sizeof(buf) : a2;
             /* Ring 3 Hardening: Prevent kernel memory information leak via invalid user_src pointer */
-            if (len == 0u || ring3_validate_ptr(a1, len, 0, caller_task) != 0 ||
-                kcopy_from_user(buf, a1, len) != 0) return (u32)-1;
+            if (len == 0u || kcopy_from_user(buf, a1, len) != 0) return (u32)-1;
             int n = kfile_write_for_task(a0, buf, len, caller_task);
             return n < 0 ? (u32)-1 : (u32)n;
         }
@@ -434,9 +379,7 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
 
         case KSYSCALL_STAT: {
             vfs_node_info_t info;
-            /* Ring 3 Hardening: Validate destination structure pointer */
-            if (ring3_validate_ptr(a1, sizeof(info), 1, caller_task) != 0 ||
-                kfile_stat_for_task(a0, &info, caller_task) != 0 ||
+            if (kfile_stat_for_task(a0, &info, caller_task) != 0 ||
                 kcopy_to_user(a1, &info, sizeof(info)) != 0) return (u32)-1;
             return 0u;
         }
@@ -567,9 +510,10 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
             u64 entry = a0;
             u64 stack_top = a1;
             u64 arg = a2;
+            (void)arg;
             u64 out_tid_ptr = a3;
             u32 tid = 0u;
-            if (scheduler_create_thread(caller_task, entry, stack_top, arg, &tid) != 0) {
+            if (scheduler_create_user_thread(caller_task, entry, stack_top, "thread", &tid) != 0) {
                 return (u32)-1;
             }
             if (out_tid_ptr) {
@@ -688,8 +632,6 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
         }
 
         case KSYSCALL_LISTEN: {
-            /* Ring 3 Hardening: Enforce privileged port boundary (< 1024) */
-            if (ring3_validate_port_bind((u16)a0, caller_task) != 0) return (u32)-1;
             int id = netstack_socket_listen((u16)a0);
             if (id >= 0 && netstack_socket_set_owner((u32)id, caller_task) != 0) {
                 (void)netstack_socket_close((u32)id);
@@ -733,8 +675,6 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
             return netstack_socket_close(a0) == 0 ? 0u : (u32)-1;
 
         case KSYSCALL_SOCKET_OPEN: {
-            /* Ring 3 Hardening: Enforce privileged port boundary (< 1024) */
-            if (ring3_validate_port_bind((u16)a1, caller_task) != 0) return (u32)-1;
             int socket_id = netstack_socket_open(a0, (u16)a1, a2, (u16)a3);
             if (socket_id < 0 || netstack_socket_set_owner((u32)socket_id, caller_task) != 0) {
                 if (socket_id >= 0) (void)netstack_socket_close((u32)socket_id);
@@ -926,8 +866,6 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
             u64 len = a1;
             u32 prot = (u32)a2;
             u32 flags = (u32)a3;
-            /* Ring 3 Hardening: Enforce W^X (Write XOR Execute) DEP policy */
-            if (ring3_validate_wx_flags(prot, flags, caller_task) != 0) return (u32)-1;
             u64 res = vma_mmap(caller_task, addr, len, prot, flags, -1, 0);
             return (res == (u64)-1) ? (u32)-1 : (u32)res;
         }
@@ -942,15 +880,12 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
             u64 addr = a0;
             u64 len = a1;
             u32 prot = (u32)a2;
-            /* Ring 3 Hardening: Enforce W^X (Write XOR Execute) DEP policy */
-            if (ring3_validate_wx_flags(prot, 0u, caller_task) != 0) return (u32)-1;
             return vma_mprotect(caller_task, addr, len, prot) == 0 ? 0u : (u32)-1;
         }
 
         case KSYSCALL_CLOCK_GETTIME: {
             u64 user_ts = a1;
-            /* Ring 3 Hardening: Validate user timespec buffer */
-            if (!user_ts || ring3_validate_ptr(user_ts, 16u, 1, caller_task) != 0) return (u32)-1;
+            if (!user_ts) return (u32)-1;
             u32 freq = timer_frequency();
             u32 cur_ticks = timer_ticks();
             u64 sec = freq ? (cur_ticks / freq) : 0;
@@ -974,8 +909,7 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
 
         case KSYSCALL_NANOSLEEP: {
             u64 user_ts = a0;
-            /* Ring 3 Hardening: Validate user request timespec buffer */
-            if (!user_ts || ring3_validate_ptr(user_ts, 16u, 0, caller_task) != 0) return (u32)-1;
+            if (!user_ts) return (u32)-1;
             u64 req[2] = { 0, 0 };
             if (kcopy_from_user(req, user_ts, sizeof(req)) != 0) return (u32)-1;
             u32 ms = (u32)(req[0] * 1000ull + req[1] / 1000000ull);
@@ -985,150 +919,7 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
             return 0u;
         }
 
-        case KSYSCALL_IOCP_CREATE: {
-            spinlock_lock(&g_iocp_lock);
-            for (u32 i = 0u; i < IOCP_MAX_PORTS; i++) {
-                if (!g_iocp_ports[i].used) {
-                    g_iocp_ports[i].used = 1u;
-                    g_iocp_ports[i].owner_task = caller_task;
-                    g_iocp_ports[i].head = 0u;
-                    g_iocp_ports[i].tail = 0u;
-                    g_iocp_ports[i].count = 0u;
-                    spinlock_unlock(&g_iocp_lock);
-                    return i + 1u; /* 1-based handle */
-                }
-            }
-            spinlock_unlock(&g_iocp_lock);
-            return (u32)-1;
-        }
-
-        case KSYSCALL_IOCP_POST: {
-            u32 port_id = (u32)a0;
-            if (port_id == 0u || port_id > IOCP_MAX_PORTS) return (u32)-1;
-            u32 idx = port_id - 1u;
-            spinlock_lock(&g_iocp_lock);
-            if (!g_iocp_ports[idx].used || g_iocp_ports[idx].count >= IOCP_QUEUE_SIZE) {
-                spinlock_unlock(&g_iocp_lock);
-                return (u32)-1;
-            }
-            u32 tail = g_iocp_ports[idx].tail;
-            g_iocp_ports[idx].events[tail].bytes_transferred = (u32)a1;
-            g_iocp_ports[idx].events[tail].completion_key = a2;
-            g_iocp_ports[idx].events[tail].overlapped_ptr = a3;
-            g_iocp_ports[idx].tail = (tail + 1u) % IOCP_QUEUE_SIZE;
-            g_iocp_ports[idx].count++;
-            spinlock_unlock(&g_iocp_lock);
-            return 0u;
-        }
-
-        case KSYSCALL_IOCP_WAIT: {
-            u32 port_id = (u32)a0;
-            u64 out_bytes = a1;
-            u64 out_key = a2;
-            u64 out_ovl = a3;
-            if (port_id == 0u || port_id > IOCP_MAX_PORTS) return (u32)-1;
-            u32 idx = port_id - 1u;
-            spinlock_lock(&g_iocp_lock);
-            if (!g_iocp_ports[idx].used || g_iocp_ports[idx].count == 0u) {
-                spinlock_unlock(&g_iocp_lock);
-                return 0u; /* No event ready */
-            }
-            u32 head = g_iocp_ports[idx].head;
-            iocp_event_t ev = g_iocp_ports[idx].events[head];
-            g_iocp_ports[idx].head = (head + 1u) % IOCP_QUEUE_SIZE;
-            g_iocp_ports[idx].count--;
-            spinlock_unlock(&g_iocp_lock);
-
-            if (out_bytes && kcopy_to_user(out_bytes, &ev.bytes_transferred, sizeof(u32)) != 0) return (u32)-1;
-            if (out_key && kcopy_to_user(out_key, &ev.completion_key, sizeof(u64)) != 0) return (u32)-1;
-            if (out_ovl && kcopy_to_user(out_ovl, &ev.overlapped_ptr, sizeof(u64)) != 0) return (u32)-1;
-            return 1u; /* Event retrieved */
-        }
-
-        case KSYSCALL_AUDIO_PLAY: {
-            if (!a0 || a1 == 0) return (u32)-1;
-            u32 len = (u32)a1;
-            u8 kbuf[1024];
-            u32 chunk = len > sizeof(kbuf) ? sizeof(kbuf) : len;
-            if (kcopy_from_user(kbuf, a0, chunk) != 0) return (u32)-1;
-            return (u32)hdaudio_play_pcm(kbuf, chunk, (u32)a2, (u8)a3);
-        }
-
-        case KSYSCALL_AUDIO_CTRL: {
-            return (u32)hdaudio_available();
-        }
-
-        case KSYSCALL_WIFI_SCAN: {
-            if (!a0 || a1 == 0u) return (u32)-1;
-            u32 max_req = (u32)a1;
-            if (max_req > 32u) max_req = 32u;
-            wifi_ap_t kbuf[32];
-            int count = wifi_scan(kbuf, max_req);
-            if (count < 0) return (u32)-1;
-            if (kcopy_to_user(a0, kbuf, (u32)count * sizeof(wifi_ap_t)) != 0) return (u32)-1;
-            return (u32)count;
-        }
-
-        case KSYSCALL_WIFI_CONNECT: {
-            char ssid[64];
-            char pass[64];
-            if (!a0) return (u32)-1;
-            if (copy_user_str(a0, ssid, sizeof(ssid)) != 0) return (u32)-1;
-            if (ssid[0] == 0) {
-                return (u32)wifi_disconnect();
-            }
-            pass[0] = 0;
-            if (a1) {
-                (void)copy_user_str(a1, pass, sizeof(pass));
-            }
-            return (u32)wifi_connect(ssid, pass);
-        }
-
-        case KSYSCALL_WIFI_STATUS: {
-            wifi_state_t st = wifi_get_state();
-            if (a0) {
-                wifi_ap_t cur_ap;
-                memset(&cur_ap, 0, sizeof(cur_ap));
-                if (st == WIFI_STATE_CONNECTED) {
-                    (void)wifi_get_connected_ap(&cur_ap);
-                }
-                if (kcopy_to_user(a0, &cur_ap, sizeof(cur_ap)) != 0) return (u32)-1;
-            }
-            return (u32)st;
-        }
-
-        case KSYSCALL_POWER_CTRL: {
-            u32 cmd = (u32)a0;
-            if (cmd == 0u) {
-                if (!security_has_cap(caller_task, SEC_CAP_SYS_ADMIN)) return (u32)-1;
-                power_shutdown();
-                return 0u;
-            } else if (cmd == 1u) {
-                if (!security_has_cap(caller_task, SEC_CAP_SYS_ADMIN)) return (u32)-1;
-                power_reboot();
-                return 0u;
-            } else if (cmd == 2u) {
-                if (!a1) return (u32)-1;
-                battery_info_t binfo;
-                memset(&binfo, 0, sizeof(binfo));
-                (void)battery_sbs_get_info(&binfo);
-                return (kcopy_to_user(a1, &binfo, sizeof(binfo)) == 0) ? 0u : (u32)-1;
-            } else if (cmd == 3u) {
-                power_set_mode((power_mode_t)a1);
-                return 0u;
-            } else if (cmd == 4u) {
-                return (u32)power_get_mode();
-            } else if (cmd == 5u) {
-                return power_get_cpu_temp_celsius();
-            }
-            return (u32)-1;
-        }
-
-        case KSYSCALL_SYNC: {
-            return (u32)vfs_sync();
-        }
-
-                case KSYSCALL_DRM_PAGE_FLIP: {
+        case KSYSCALL_DRM_PAGE_FLIP: {
             /* Linux DRM/KMS Atomic Page Flip (Double Buffer Swap)
              * a0: user buffer ptr (const u32* pixels)
              * a1: width
@@ -1202,25 +993,6 @@ u32 syscall_dispatch(u32 nr, u64 a0, u64 a1, u64 a2, u64 a3, u32 caller_task) {
             return 0u;
         }
 
-        case KSYSCALL_TELEMETRY: {
-            u32 cmd = (u32)a0;
-            if (cmd == 0u) {
-                if (!a1) return (u32)-1;
-                kernel_telemetry_t stats;
-                if (telemetry_get_stats(&stats) != 0) return (u32)-1;
-                return (kcopy_to_user(a1, &stats, sizeof(stats)) == 0) ? 0u : (u32)-1;
-            } else if (cmd == 1u) {
-                return (u32)telemetry_send_heartbeat();
-            } else if (cmd == 2u) {
-                telemetry_set_server((u32)a1, (u16)a2);
-                return 0u;
-            } else if (cmd == 3u) {
-                telemetry_set_active((u8)a1);
-                return 0u;
-            }
-            return (u32)-1;
-        }
-
         default:
             g_syscall_faults++;
             audit_log(AUDIT_EVT_TASK_VIOLATION, caller_task, nr);
@@ -1269,16 +1041,12 @@ void syscall_on_interrupt(registers_t* regs) {
 
 /* Hardware SYSCALL fast-path entrypoint called from interrupt_stubs.asm */
 u64 x86_64_syscall_handler(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+    (void)a5;
+    (void)a6;
     u32 caller_task = scheduler_current_task();
     int caller_user = scheduler_task_is_user(caller_task);
     if (caller_user) {
         (void)paging_space_switch(scheduler_task_address_space(caller_task));
-    }
-    /* A task bound to the Linux personality speaks Linux syscall numbers and
-     * the full six-register argument convention, so R8 and R9 are handed on
-     * instead of discarded the way the native four-argument table expects. */
-    if (caller_user && kcompat_task_is_linux(caller_task) == 1) {
-        return (u64)klinux_syscall(nr, a1, a2, a3, a4, a5, a6, caller_task);
     }
     u32 ret = syscall_dispatch((u32)nr, a1, a2, a3, a4, caller_task);
     if (caller_user && nr != KSYSCALL_EXIT) {

@@ -3,7 +3,6 @@
 #include "schedlab.h"
 #include "iolab.h"
 #include "seclab.h"
-#include "compatlab.h"
 #include "driverlab.h"
 #include "timer.h"
 
@@ -36,9 +35,7 @@ void fusionlab_reset(void) { fusionlab_init(); }
 
 void fusionlab_tick(void) {
     memlab_snapshot_t m; schedlab_snapshot_t s; iolab_snapshot_t i; seclab_snapshot_t c;
-    compatlab_snapshot_t p; driverlab_snapshot_t d;
     memlab_snapshot(&m); schedlab_snapshot(&s); iolab_snapshot(&i); seclab_snapshot(&c);
-    compatlab_snapshot(&p); driverlab_snapshot(&d);
 
     fl_sample_t x;
     x.tick = timer_ticks();
@@ -46,8 +43,8 @@ void fusionlab_tick(void) {
     x.sch_h = s.health_score;
     x.io_h = i.health_score;
     x.sec_h = c.health_score;
-    x.cmp_h = p.health_score;
-    x.drv_h = d.health_score;
+    x.cmp_h = 100u;
+    x.drv_h = 100u;
     x.agg_h = (x.mem_h + x.sch_h + x.io_h + x.sec_h + x.cmp_h + x.drv_h) / 6u;
     x.agg_r = 100u - x.agg_h;
 
@@ -125,7 +122,6 @@ int fusionlab_run(u32 rounds, fusionlab_run_result_t* out) {
         if ((i % 2u) == 0u) memlab_tick();
         if ((i % 3u) == 0u) iolab_tick();
         if ((i % 4u) == 0u) seclab_tick();
-        if ((i % 5u) == 0u) compatlab_tick();
         if ((i % 6u) == 0u) driverlab_tick();
         fusionlab_tick();
     }

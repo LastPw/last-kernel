@@ -17,7 +17,6 @@
 #include "scheduler.h"
 #include "spinlock.h"
 #include "paging.h"
-#include "linux_compat.h"
 
 /*
  * Adaptive Polymorphic Kernel Subsystem (APK Master Orchestrator)
@@ -256,7 +255,7 @@ int apk_polymorphic_exec(const char* path, const u8* data, u32 size, int argc, c
     serial_write("\n");
 
     if (type == APK_BIN_LINUX_ELF) {
-        return linux_run_binary(data, size, path ? path : "linux_app", 0);
+        return -1; /* Linux compat omitted */
     } else if (type == APK_BIN_WINDOWS_PE) {
         return pe_load_and_run(data, size, argc, argv);
     } else if (type == APK_BIN_WASM) {

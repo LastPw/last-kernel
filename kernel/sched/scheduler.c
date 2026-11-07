@@ -6,8 +6,6 @@
  * =============================================================================
  */
 
-#include "mem_sched_harden.h"
-#include "mem_sched_harden.inc"
 #include "scheduler.h"
 #include "string.h"
 #include "multicore_scheduler.h"
@@ -15,16 +13,12 @@
 #include "task_protect.h"
 #include "memory_protect.h"
 #include "audit.h"
-#include "process_monitor.h"
-#include "memory_monitor.h"
 #include "cgroup.h"
 #include "namespace.h"
 #include "io_scheduler.h"
 #include "timer.h"
-#include "compat.h"
 #include "pcoe2.h"
 #include "vm.h"
-#include "ktrace.h"
 #include "security.h"
 #include "proc_core.h"
 #include "schedlab.h"
@@ -559,12 +553,6 @@ static u64 effective_vruntime(const sched_task_t* t) {
     if (io.net_packets > 200 && t->task_class == TASK_CLASS_NET) {
         if (v > 32) v -= 32;
     }
-    compat_personality_t cp = compat_personality_of(t->id);
-    if (cp == COMPAT_PERS_WINDOWS && t->task_class == TASK_CLASS_IO) {
-        if (v > 24) v -= 24;
-    } else if (cp == COMPAT_PERS_LINUX && t->task_class == TASK_CLASS_NET) {
-        if (v > 24) v -= 24;
-    }
     u32 preempt_hint = pcoe2_scheduler_preempt_hint();
     if (preempt_hint >= 3u && t->task_class == TASK_CLASS_NET) {
         if (v > 20) v -= 20;
@@ -656,9 +644,6 @@ static int eligible(u32 idx, u32 now_tick) {
         return 0;
     }
     if (!has_runnable_context(idx)) {
-        return 0;
-    }
-    if (process_monitor_is_blocked(tasks[idx].id)) {
         return 0;
     }
     if (!cgroup_cpu_allow(tasks[idx].id, now_tick)) {
@@ -863,9 +848,7 @@ static void rebalance_affinity(void) {
 
 void scheduler_init(void) {
     /* Memory & Scheduler Hardening: Initialize subsystem and execute 8-vector defense verification */
-    mem_sched_hardening_init();
-    (void)mem_sched_hardening_selftest();
-    task_count = 5;
+            task_count = 5;
     pid_state = scheduler_pid_entropy();
     if (pid_state == 0u) pid_state = 0xA53C9E17u;
 
@@ -906,7 +889,6 @@ void scheduler_init(void) {
         task_protect_set_range(tasks[i].id, start, end, TASK_PRIV_USER);
         memory_protect_set_task_stack(tasks[i].id, end - 0x8000u, end - 0x1000u);
         security_set_task_caps(tasks[i].id, SEC_CAP_NET_ADMIN);
-        process_monitor_register_named(tasks[i].id, default_process_names[i]);
         (void)vm_register_task_space(tasks[i].id, start, end);
         proc_core_register_task(tasks[i].id, 1u);
     }
@@ -914,7 +896,6 @@ void scheduler_init(void) {
     security_set_task_caps(1u, SEC_CAP_MODULE_LOAD | SEC_CAP_FS_ADMIN | SEC_CAP_NET_ADMIN);
 
     task_protect_set_range(0, 0x00000000, 0x00400000, TASK_PRIV_KERNEL);
-    process_monitor_register_named(0, default_process_names[0]);
     cgroup_bind_task(0, 1);
     namespace_bind_task(0, 1);
     for (u32 i = 1; i < task_count; i++) {
@@ -1060,7 +1041,6 @@ void scheduler_tick(registers_t* regs) {
     mcs_account_tick(current_core, busy);
     scheduler_update_task_signals(current, busy ? 1u : 0u);
     scheduler_update_core_signals(current_core, busy ? 1u : 0u);
-    process_monitor_on_tick(tasks[current].id, busy);
     io_scheduler_tick(now_tick);
 
     sample_ticks++;
@@ -1116,7 +1096,7 @@ void scheduler_tick(registers_t* regs) {
         sched_fxsave(&tasks[current]);
     }
 
-    if (slice_ticks >= dynamic_slice_goal || current == 0 || process_monitor_is_blocked(tasks[current].id)) {
+    if (slice_ticks >= dynamic_slice_goal || current == 0) {
         slice_ticks = 0;
         scheduler_schedule_from_irq(regs);
     }
@@ -1133,7 +1113,6 @@ void scheduler_schedule_from_irq(registers_t* regs) {
         return;
     }
     /* Scheduler Hardening: Validate context frame registers of current task */
-    (void)sched_harden_validate_context(regs->cs, regs->ss, regs->rsp, tasks[current].id);
 
     /* During boot the kernel is still constructing the user tasks.  Do not let
        a timer tick preempt that work into a half-loaded ELF; the initial user
@@ -1236,7 +1215,6 @@ void scheduler_schedule_from_irq(registers_t* regs) {
         current_core = target_core;
         schedlab_on_switch(tasks[current].id, tasks[next].id, current_core);
         tasks[next].home_core = (u8)current_core;
-        ktrace_push(KTRACE_EVT_SCHED_SWITCH, (u16)current_core, tasks[current].id, tasks[next].id, (u32)tasks[next].priority);
         slice_ticks = 0;
     }
     current = next;
@@ -1293,7 +1271,6 @@ void scheduler_schedule(void) {
         current_core = target_core;
         schedlab_on_switch(tasks[current].id, tasks[next].id, current_core);
         tasks[next].home_core = (u8)current_core;
-        ktrace_push(KTRACE_EVT_SCHED_SWITCH, (u16)current_core, tasks[current].id, tasks[next].id, (u32)tasks[next].priority);
         slice_ticks = 0;
     }
     current = next;
@@ -1348,7 +1325,6 @@ int scheduler_create_user_task(const char* name, u32* out_task_id) {
         if (appended) task_count--;
         return -1;
     }
-    process_monitor_register_named(tasks[idx].id, name ? name : "user-process");
     proc_core_register_task(tasks[idx].id, tasks[current].id);
     cgroup_bind_task(tasks[idx].id, 1u);
     namespace_bind_task(tasks[idx].id, 1u);
@@ -1439,7 +1415,6 @@ int scheduler_create_user_thread(u32 parent_task, u64 entry, u64 user_stack,
     tasks[idx].priority = 1u;
     tasks[idx].policy = SCHED_POLICY_RT;
 
-    process_monitor_register_named(tasks[idx].id, name ? name : "user-thread");
     proc_core_register_task(tasks[idx].id, parent_task);
     cgroup_bind_task(tasks[idx].id, 1u);
     namespace_bind_task(tasks[idx].id, 1u);
@@ -1662,7 +1637,6 @@ int scheduler_exit_task(u32 task_id, i32 exit_code) {
     tasks[idx].state = TASK_DEAD;
     tasks[idx].realtime = 0;
     syscall_release_task(task_id);
-    memory_monitor_release_task(task_id);
     scheduler_sync_task_to_rust((u32)idx);
     parent_task = proc_core_parent(task_id);
     /* Kernel-launched processes have no user parent that can wait for them;
@@ -1719,7 +1693,6 @@ int scheduler_reap_task(u32 task_id) {
     if (idx <= 0 || tasks[idx].state != TASK_DEAD) return -1;
     /* The process core has already released the zombie record. Keep the
        scheduler slot reusable without compacting live task indices. */
-    process_monitor_unregister(task_id);
     tasks[idx].id = 0u;
     tasks[idx].wait_child = 0u;
     tasks[idx].has_context = 0u;

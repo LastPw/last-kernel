@@ -2,6 +2,10 @@
 #include "string.h"
 #include "spinlock.h"
 
+#ifndef HOST_TEST
+#include "disk.h"
+#endif
+
 /* ==============================================================================
  * Enterprise Software RAID Subsystem (RAID 0, 1, 5, 6, 10)
  * ============================================================================== */
@@ -199,21 +203,59 @@ int raid_server_rebuild(u32 volume_id) {
 
 int raid_server_read(u32 volume_id, u64 lba_offset, u32 num_sectors, u8* buffer) {
     if (volume_id >= RAID_SERVER_MAX_VOLUMES || !buffer) return -1;
-    (void)lba_offset;
     u32 flags = spinlock_lock_irqsave(&s_raid_lock);
-    s_volumes[volume_id].reads_completed++;
-    /* Simulate successful read */
+    raid_server_volume_t* v = &s_volumes[volume_id];
+    v->reads_completed++;
+
+#ifndef HOST_TEST
+    /* Forward read to real underlying member disks */
+    if (v->num_disks > 0) {
+        for (u32 i = 0; i < v->num_disks; i++) {
+            if (!v->disks[i].is_online || v->disks[i].is_spare) continue;
+            u32 target_disk = v->disks[i].disk_id;
+            if (disk_select(target_disk) == 0) {
+                for (u32 s = 0; s < num_sectors; s++) {
+                    if (disk_read_sector((u32)(lba_offset + s), buffer + s * 512) != 0) {
+                        spinlock_unlock_irqrestore(&s_raid_lock, flags);
+                        return -2;
+                    }
+                }
+                spinlock_unlock_irqrestore(&s_raid_lock, flags);
+                return 0;
+            }
+        }
+    }
+#else
+    (void)lba_offset;
+    /* Host test fallback data */
     memset(buffer, 0x5A, num_sectors * 512);
+#endif
+
     spinlock_unlock_irqrestore(&s_raid_lock, flags);
     return 0;
 }
 
 int raid_server_write(u32 volume_id, u64 lba_offset, u32 num_sectors, const u8* buffer) {
     if (volume_id >= RAID_SERVER_MAX_VOLUMES || !buffer) return -1;
+    u32 flags = spinlock_lock_irqsave(&s_raid_lock);
+    raid_server_volume_t* v = &s_volumes[volume_id];
+    v->writes_completed++;
+
+#ifndef HOST_TEST
+    /* Forward write to real underlying member disks */
+    for (u32 i = 0; i < v->num_disks; i++) {
+        if (!v->disks[i].is_online || v->disks[i].is_spare) continue;
+        if (disk_select(v->disks[i].disk_id) == 0) {
+            for (u32 s = 0; s < num_sectors; s++) {
+                disk_write_sector((u32)(lba_offset + s), buffer + s * 512);
+            }
+        }
+    }
+#else
     (void)lba_offset;
     (void)num_sectors;
-    u32 flags = spinlock_lock_irqsave(&s_raid_lock);
-    s_volumes[volume_id].writes_completed++;
+#endif
+
     spinlock_unlock_irqrestore(&s_raid_lock, flags);
     return 0;
 }

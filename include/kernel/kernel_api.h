@@ -6,26 +6,18 @@
 #include "cpu_detect.h"
 #include "metrics.h"
 #include "threat_logger.h"
-#include "process_monitor.h"
 #include "module.h"
 #include "cgroup.h"
 #include "namespace.h"
-#include "resource_monitor.h"
 #include "power.h"
 #include "scheduler.h"
-#include "resource_engine.h"
 #include "sdc.h"
-#include "antivirus.h"
 #include "ai_security.h"
 #include "hal.h"
 #include "ultimate.h"
 #include "ultimate_kernel.h"
 #include "pcoe2.h"
-#include "compat.h"
 #include "watchdog.h"
-#include "selftest.h"
-#include "paniclog.h"
-#include "ktrace.h"
 #include "vfs.h"
 #include "file.h"
 #include "driver_bus.h"
@@ -40,7 +32,6 @@
 #include "schedlab.h"
 #include "iolab.h"
 #include "seclab.h"
-#include "compatlab.h"
 #include "driverlab.h"
 #include "fusionlab.h"
 #include "kinit.h"
@@ -109,14 +100,10 @@ int kpersist_get_ui_prefs(
 );
 void kclip_set(const char* text);
 void kclip_get(char* out, u32 out_size);
-int kpatch_selftest(void);
 u32 kthreat_count(void);
 int kthreat_get(u32 reverse_index, threat_record_t* out);
 u32 kprocess_count(void);
-int kprocess_get(u32 task_id, process_info_t* out);
-int kprocess_at(u32 index, process_info_t* out);
 u32 kprocess_current(void);
-void kantivirus_status(antivirus_status_t* out);
 void kai_security_status(ai_security_status_t* out);
 void khal_status(hal_status_t* out);
 void khal_set_mode(hal_mode_t mode);
@@ -162,7 +149,6 @@ int knamespace_create(void);
 int knamespace_bind_task(u32 task_id, u32 ns_id);
 u32 knamespace_count(void);
 int knamespace_get_by_index(u32 idx, namespace_info_t* out);
-void kresmon(resource_snapshot_t* out);
 void kset_power_mode(power_mode_t mode);
 power_mode_t kget_power_mode(void);
 void kshutdown(void);
@@ -181,9 +167,6 @@ int ksched_task_telemetry(u32 task_id, scheduler_task_telemetry_t* out);
 void ksched_policy_stats(scheduler_policy_stats_t* out);
 int ksandbox_set_quota(const char* module_name, u32 mem_limit_kb, u32 cpu_limit_percent);
 int ksandbox_get_quota(const char* module_name, u32* mem_limit_kb, u32* cpu_limit_percent);
-void kresource_engine(resource_engine_snapshot_t* out);
-void kresource_profile(re_profile_t profile);
-re_profile_t kresource_get_profile(void);
 void ksdc_status(sdc_status_t* out);
 void ksdc_mode(sdc_mode_t mode);
 sdc_mode_t ksdc_get_mode(void);
@@ -191,13 +174,6 @@ int ksdc_register_hook(const char* module_name, hook_fn_t fn);
 void kwatchdog_status(watchdog_status_t* out);
 void kwatchdog_policy(watchdog_policy_t* out);
 void kwatchdog_set_policy(const watchdog_policy_t* policy);
-int kselftest_full(selftest_result_t* out);
-void kselftest_status(selftest_result_t* out);
-u32 kpaniclog_count(void);
-int kpaniclog_get(u32 reverse_index, panic_record_t* out);
-void kpaniclog_clear(void);
-u32 ktrace_events(void);
-int ktrace_event(u32 reverse_index, ktrace_event_t* out);
 u32 kvfs_list(const char* path, vfs_node_info_t* out, u32 max_out);
 int kvfs_info(const char* path, vfs_node_info_t* out);
 int kvfs_mkdir(const char* path);
@@ -284,7 +260,6 @@ int knetstack_socket_set_owner(u32 sock_id, u32 owner_task);
 void knetstack_socket_release_task(u32 task_id);
 void knetstack_set_local(u32 ip, u32 mask, u32 gateway);
 
-int kcompat_bind(u32 task_id, compat_personality_t personality, u32 bbf_seed);
 void ksyscall_policy_reset(u32 task_id);
 int ksyscall_policy_set(u32 task_id, u32 nr, u8 allowed);
 int ksyscall_policy_allowed(u32 task_id, u32 nr);
@@ -293,17 +268,6 @@ int kelf_load_user(const u8* image, u32 image_len, u32 task_id, elf_exec_info_t*
 int kelf_clone_user(u32 parent_task, u32 child_task, elf_exec_info_t* out);
 int kscheduler_create_user_task(const char* name, u32* out_task_id);
 void kscheduler_request_user_switch(void);
-compat_personality_t kcompat_personality(u32 task_id);
-int kcompat_syscall(u32 task_id, u32 foreign_nr, u32 a0, u32 a1, u32 a2, u32* out_ret);
-void kcompat_status(compat_status_t* out);
-int kcompat_profile(u32 task_id, compat_profile_t* out);
-void kcompat_note_crash(u32 task_id, u32 reason);
-void kcompat_pal(compat_personality_t p, pal_descriptor_t* out);
-int kcompat_sync(u32 task_id, u32 mode, compat_sync_report_t* out);
-u32 kcompat_autosync(u32 budget);
-int kcompat_probe_binary(const u8* data, u32 len, compat_binary_probe_t* out);
-int kcompat_prepare_task_from_probe(u32 task_id, const compat_binary_probe_t* probe);
-int kcompat_prepare_task_from_kind(u32 task_id, compat_binary_kind_t kind);
 void kkshield_status(kshield_status_t* out);
 void kkshield_mode(kshield_mode_t mode);
 void kkshield_lockdown(u8 level);
@@ -343,10 +307,6 @@ void kseclab_status(seclab_snapshot_t* out);
 void kseclab_reset(void);
 int kseclab_validate(seclab_validation_t* out);
 int kseclab_run(u32 mode, u32 rounds, seclab_run_result_t* out);
-void kcompatlab_status(compatlab_snapshot_t* out);
-void kcompatlab_reset(void);
-int kcompatlab_validate(compatlab_validation_t* out);
-int kcompatlab_run(u32 mode, u32 rounds, compatlab_run_result_t* out);
 void kdriverlab_status(driverlab_snapshot_t* out);
 void kdriverlab_reset(void);
 int kdriverlab_validate(driverlab_validation_t* out);
@@ -401,7 +361,6 @@ u32  knat_conntrack_count(void);
 int  knat_conntrack_get(u32 index, conntrack_entry_t* out);
 void knat_status(nat_status_t* out);
 
-/* Linux-compatible filesystem mount API */
 #include "mount.h"
 int kmount(const char* mount_point, const char* fstype, u32 dev_id, u32 start_lba);
 int kumount(const char* mount_point);

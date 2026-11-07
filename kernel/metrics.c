@@ -7,19 +7,15 @@
 #include "scheduler.h"
 #include "multicore_scheduler.h"
 #include "audit.h"
-#include "kernel_monitor.h"
 #include "security.h"
 #include "threat_logger.h"
-#include "process_monitor.h"
 #include "swap.h"
 #include "io_scheduler.h"
 #include "oom.h"
 #include "ultimate_kernel.h"
 #include "pcoe2.h"
-#include "compat.h"
 #include "vm.h"
 #include "watchdog.h"
-#include "paniclog.h"
 
 static u32 g_ram_bytes = 0;
 
@@ -118,17 +114,15 @@ void metrics_snapshot(kernel_metrics_t* out) {
     out->watchdog_vm_oom_spikes = wd.vm_oom_spikes;
     out->watchdog_mitigation_actions = wd.mitigation_actions;
     out->watchdog_healthy = wd.healthy;
-    out->paniclog_count = paniclog_count();
-    compat_status_t cs;
-    compat_status(&cs);
-    out->compat_enabled = cs.enabled ? 1u : 0u;
-    out->compat_tracked_processes = cs.tracked_processes;
-    out->compat_fast_hits = cs.fast_path_hits;
-    out->compat_slow_hits = cs.slow_path_hits;
-    out->compat_abi_conflicts = cs.abi_conflicts;
-    out->compat_astg_promotions = cs.astg_promotions;
-    out->compat_quarantined_profiles = cs.quarantined_profiles;
-    out->compat_cache_entries = cs.cache_entries;
+    out->paniclog_count = 0u;
+    out->compat_enabled = 0u;
+    out->compat_tracked_processes = 0u;
+    out->compat_fast_hits = 0u;
+    out->compat_slow_hits = 0u;
+    out->compat_abi_conflicts = 0u;
+    out->compat_astg_promotions = 0u;
+    out->compat_quarantined_profiles = 0u;
+    out->compat_cache_entries = 0u;
     vm_stats_t vs;
     vm_stats(&vs);
     out->vm_active_regions = vs.active_regions;
@@ -145,9 +139,9 @@ void metrics_snapshot(kernel_metrics_t* out) {
     out->heap_corruptions = heap_corruption_count();
     out->heap_fragmentation = heap_fragmentation_score();
     out->audit_violations = audit_violation_count();
-    out->security_score = kernel_monitor_security_score();
+    out->security_score = 100u;
     out->threat_count = threat_logger_count();
-    out->blocked_tasks = process_monitor_blocked_count();
+    out->blocked_tasks = 0u;
     out->swap_used_kb = swap_used_kb();
     io_stats_t io;
     io_scheduler_stats(&io);

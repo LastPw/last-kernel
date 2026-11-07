@@ -4,6 +4,15 @@
  * ============================================================================== */
 
 #include "vtty.h"
+#ifdef HOST_TEST
+#include <string.h>
+#include <stdio.h>
+static inline void screen_set_cursor(u8 x, u8 y) { (void)x; (void)y; }
+static u16 host_vga_buffer[VTTY_ROWS * VTTY_COLS];
+#define VGA_TEXT_MEMORY host_vga_buffer
+#else
+#define VGA_TEXT_MEMORY ((volatile u16*)0xB8000)
+#endif
 #include "screen.h"
 #include "string.h"
 #include "heap.h"
@@ -111,6 +120,13 @@ void vtty_putc(vtty_t* vt, char c) {
     if (c == '\n' || c == '\r') {
         vt->cursor_x = 0;
         vt->cursor_y++;
+        if (vt->cursor_y >= VTTY_ROWS - 1) { /* Reserve last line for Status Bar */
+            memmove(&vt->screen_buffer[0], &vt->screen_buffer[VTTY_COLS], (VTTY_ROWS - 2) * VTTY_COLS * sizeof(u16));
+            for (u32 k = 0; k < VTTY_COLS; k++) {
+                vt->screen_buffer[(VTTY_ROWS - 2) * VTTY_COLS + k] = (u16)(' ' | (vt->fg_color << 8));
+            }
+            vt->cursor_y = VTTY_ROWS - 2;
+        }
     } else if (c == '\b') {
         if (vt->cursor_x > 0) {
             vt->cursor_x--;
@@ -183,7 +199,7 @@ void vtty_render_status_bar(void) {
     }
 
     /* Direct VGA memory write if in VGA text mode */
-    volatile u16* vga = (volatile u16*)0xB8000;
+    volatile u16* vga = VGA_TEXT_MEMORY;
     for (u32 x = 0; x < VTTY_COLS; x++) {
         vga[(VTTY_ROWS - 1) * VTTY_COLS + x] = bar[x];
     }
@@ -191,7 +207,7 @@ void vtty_render_status_bar(void) {
 
 void vtty_flush_to_screen(vtty_t* vt) {
     if (!vt) return;
-    volatile u16* vga = (volatile u16*)0xB8000;
+    volatile u16* vga = VGA_TEXT_MEMORY;
 
     /* Copy current terminal buffer to VGA text memory */
     for (u32 i = 0; i < (VTTY_ROWS - 1) * VTTY_COLS; i++) {

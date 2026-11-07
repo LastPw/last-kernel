@@ -326,35 +326,12 @@ int wifi_tx_packet(const u8* eth_packet, u32 len) {
 
 int wifi_init(void) {
     spinlock_init(&g_wifi_lock);
-    serial_write("[WIFI] Initializing IEEE 802.11 Wireless Subsystem & WPA2 Engine...\n");
+    serial_write("[WIFI] Initializing IEEE 802.11 Protocol & WPA2/WPA3 Security Subsystem...\n");
 
     g_wifi_state = WIFI_STATE_DISCONNECTED;
     g_scan_ap_count = 0;
 
-    /* Prepopulate realistic APs in enterprise range */
-    wifi_ap_t* ap1 = &g_scan_results[0];
-    str_ncpy(ap1->ssid, "Axior_Gigabit_5G", WIFI_MAX_SSID_LEN);
-    ap1->bssid[0] = 0x70; ap1->bssid[1] = 0x4F; ap1->bssid[2] = 0x57;
-    ap1->bssid[3] = 0x88; ap1->bssid[4] = 0x99; ap1->bssid[5] = 0xAA;
-    ap1->channel = 36;
-    ap1->frequency_mhz = 5180;
-    ap1->rssi_dbm = -42;
-    ap1->security = WIFI_SEC_WPA2_PSK;
-    ap1->max_rate_mbps = 867;
-
-    wifi_ap_t* ap2 = &g_scan_results[1];
-    str_ncpy(ap2->ssid, "Gentoo_Hacker_Mesh", WIFI_MAX_SSID_LEN);
-    ap2->bssid[0] = 0x00; ap2->bssid[1] = 0xC0; ap2->bssid[2] = 0xCA;
-    ap2->bssid[3] = 0x11; ap2->bssid[4] = 0x22; ap2->bssid[5] = 0x33;
-    ap2->channel = 6;
-    ap2->frequency_mhz = 2437;
-    ap2->rssi_dbm = -58;
-    ap2->security = WIFI_SEC_WPA2_PSK;
-    ap2->max_rate_mbps = 300;
-
-    g_scan_ap_count = 2;
-
-    serial_write("[WIFI] Intel Wi-Fi 6 AX200 / 802.11ac Active (Dual-Band 2.4/5GHz 867Mbps)\n");
+    serial_write("[WIFI] Stack Initialized (No 802.11 PHY attached; Ethernet e1000/rtl8139 primary)\n");
     return 0;
 }
 

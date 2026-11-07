@@ -6,8 +6,6 @@
 #include "audit.h"
 #include "threat_logger.h"
 #include "power.h"
-#include "process_monitor.h"
-#include "paniclog.h"
 #include "frame_allocator.h"
 
 static watchdog_status_t st;
@@ -80,18 +78,6 @@ void watchdog_tick(void) {
         }
     }
 
-    for (u32 i = 0u; i < process_monitor_task_count(); i++) {
-        process_info_t pi;
-        if (process_monitor_snapshot_at(i, &pi) != 0 || !pi.blocked || pi.name[0] != '/') continue;
-        if (scheduler_kill_task(pi.task_id) == 0) {
-            st.process_recoveries++;
-            st.mitigation_actions++;
-            paniclog_push_for_task(pi.task_id, "watchdog terminated stalled user process",
-                                   0xF0u, 0u, 0u, 0u, st.ticks, heap_corruption_count(),
-                                   heap_fragmentation_score(), frame_used(), frame_total(),
-                                   st.stalls_detected, st.mitigation_actions);
-        }
-    }
 
     if ((st.ticks & 0x1Fu) == 0u) {
         vm_stats_t vs;

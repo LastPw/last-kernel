@@ -9,22 +9,16 @@
 #include "timer.h"
 #include "io.h"
 #include "scheduler.h"
-#include "kernel_monitor.h"
-#include "lastmap.h"
 #include "nic.h"
 #include "netstack.h"
-#include "resource_monitor.h"
 #include "self_heal.h"
 #include "sdc.h"
-#include "lastshark.h"
-#include "antivirus.h"
 #include "ai_security.h"
 #include "hal.h"
 #include "ultimate.h"
 #include "ultimate_kernel.h"
 #include "pcoe2.h"
 #include "vm.h"
-#include "compat.h"
 #include "watchdog.h"
 #include "kshield.h"
 #include "apic.h"
@@ -153,26 +147,22 @@ void timer_on_irq(registers_t* regs) {
         scheduler_tick(regs);
     }
     if (feature_on(TIMER_FEAT_MONITOR) && (ticks % 5u) == 0u) {
-        kernel_monitor_tick();
     }
     if (feature_on(TIMER_FEAT_NET) && (ticks % 4u) == 0u) {
         nic_poll(8);
         netstack_tick();
     }
     if (feature_on(TIMER_FEAT_RESOURCE) && (ticks % 10u) == 0u) {
-        resource_monitor_tick();
         watchdog_tick();
     }
     if (feature_on(TIMER_FEAT_SECURITY) && (ticks % 20u) == 0u) {
         self_heal_tick();
         sdc_tick();
-        antivirus_tick();
         ai_security_tick();
         kshield_tick();
     }
     if (feature_on(TIMER_FEAT_VM_COMPAT) && (ticks % 16u) == 0u) {
         vm_reclaim_tick();
-        compat_tick();
     }
     if (feature_on(TIMER_FEAT_ENGINE) && (ticks % 20u) == 0u) {
         hal_tick();
@@ -182,7 +172,7 @@ void timer_on_irq(registers_t* regs) {
     }
     if (feature_on(TIMER_FEAT_SCANNERS) && (ticks % 50u) == 0u) {
         lastmap_tick();
-        lastshark_tick();
+        
     }
 
     in_tick = 0;

@@ -3,7 +3,6 @@
 #include "frame_allocator.h"
 #include "paging.h"
 #include "serial.h"
-#include "process_monitor.h"
 
 #define MAX_TASKS 512
 
@@ -150,8 +149,6 @@ int task_create_kthread(int (*fn)(void*), void* arg, const char* name, task_stru
     t->context.ss = 0x10;
     t->has_context = 1;
     t->state = TASK_STATE_READY;
-
-    process_monitor_register_named((u32)t->pid, t->comm);
 
     serial_write("[Task] Created kthread PID=");
     serial_write_dec((u32)t->pid);

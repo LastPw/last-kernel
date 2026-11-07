@@ -12,7 +12,7 @@ A modular, monolithic 64-bit operating system kernel developed for the `x86_64` 
 
 ## Overview
 
-**LastKernel** is a freestanding 64-bit monolithic operating system kernel designed for modern x86_64 hardware. It operates in higher-half long mode, featuring a native bootloader, multi-core SMP scheduling, comprehensive memory management, an extensible virtual filesystem, hardware device drivers, and a POSIX / Linux binary compatibility layer.
+**LastKernel** is a freestanding 64-bit monolithic operating system kernel designed for modern x86_64 hardware. It operates in higher-half long mode, featuring a native bootloader, multi-core SMP scheduling, comprehensive memory management, an extensible virtual filesystem, and hardware device drivers.
 
 ---
 
@@ -22,7 +22,6 @@ A modular, monolithic 64-bit operating system kernel developed for the `x86_64` 
 * **Long Mode Direct Map:** Boots into pure 64-bit higher-half space (`0xFFFF800000000000`) with 4-level paging (PML4).
 * **Multi-Core SMP:** Multiprocessor initialization using APIC / IOAPIC with an AP trampoline.
 * **Preemptive Scheduling:** Fair quantum task scheduler supporting kernel threads, user tasks, signals, and process isolation.
-* **Compatibility Layer:** Linuxulator ABI layer supporting x86_64 ELF binary execution and Linux syscall emulation.
 
 ### Memory Management (`mm/`)
 * **Physical Frame Allocator:** Bitmap and zone-based frame allocation with NUMA awareness.
