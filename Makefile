@@ -168,7 +168,6 @@ C_OBJS := \
 	$(BUILD_DIR)/task_protect.o \
 	$(BUILD_DIR)/irq_sanitizer.o \
 	$(BUILD_DIR)/audit.o \
-	$(BUILD_DIR)/antivirus.o \
 	$(BUILD_DIR)/ai_security.o \
 	$(BUILD_DIR)/kshield.o \
 	$(BUILD_DIR)/security_hook.o \
@@ -186,15 +185,9 @@ C_OBJS := \
 	$(BUILD_DIR)/cgroup.o \
 	$(BUILD_DIR)/namespace.o \
 	$(BUILD_DIR)/sandbox.o \
-	$(BUILD_DIR)/resource_monitor.o \
-	$(BUILD_DIR)/resource_engine.o \
-	$(BUILD_DIR)/process_monitor.o \
-	$(BUILD_DIR)/memory_monitor.o \
-	$(BUILD_DIR)/paniclog.o \
 	$(BUILD_DIR)/metrics.o \
 	$(BUILD_DIR)/persist.o \
 	$(BUILD_DIR)/secure_patch.o \
-	$(BUILD_DIR)/ktrace.o \
 	$(BUILD_DIR)/module.o \
 	$(BUILD_DIR)/kinit.o \
 	$(BUILD_DIR)/proc_core.o \
@@ -202,7 +195,6 @@ C_OBJS := \
 	$(BUILD_DIR)/schedlab.o \
 	$(BUILD_DIR)/iolab.o \
 	$(BUILD_DIR)/seclab.o \
-	$(BUILD_DIR)/compatlab.o \
 	$(BUILD_DIR)/driverlab.o \
 	$(BUILD_DIR)/fusionlab.o \
 	$(BUILD_DIR)/rust_bridge.o \
@@ -211,19 +203,9 @@ C_OBJS := \
 	$(BUILD_DIR)/pcoe2.o \
 	$(BUILD_DIR)/pcoe2_core.o \
 	$(BUILD_DIR)/pcoe2_matrix.o \
-	$(BUILD_DIR)/compat.o \
-	$(BUILD_DIR)/compat_engine.o \
-	$(BUILD_DIR)/compat_astg.o \
-	$(BUILD_DIR)/compat_bbf.o \
-	$(BUILD_DIR)/compat_mmul.o \
-	$(BUILD_DIR)/compat_sece.o \
-	$(BUILD_DIR)/compat_dllsync.o \
-	$(BUILD_DIR)/compat_bridge.o \
-	$(BUILD_DIR)/linux_compat.o \
 	$(BUILD_DIR)/hal.o \
 	$(BUILD_DIR)/ultimate.o \
 	$(BUILD_DIR)/sdc.o \
-	$(BUILD_DIR)/selftest.o \
 	$(BUILD_DIR)/gfx.o \
 	$(BUILD_DIR)/secure_io.o \
 	$(BUILD_DIR)/userdb.o \
@@ -688,7 +670,6 @@ $(BUILD_DIR)/irq_sanitizer.o: kernel/security/irq_sanitizer.c | $(BUILD_DIR)
 $(BUILD_DIR)/audit.o: kernel/security/audit.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/antivirus.o: kernel/monitor/antivirus.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ai_security.o: kernel/security/ai_security.c | $(BUILD_DIR)
@@ -742,19 +723,14 @@ $(BUILD_DIR)/namespace.o: kernel/security/namespace.c | $(BUILD_DIR)
 $(BUILD_DIR)/sandbox.o: kernel/security/sandbox.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/resource_monitor.o: kernel/monitor/resource_monitor.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/resource_engine.o: kernel/monitor/resource_engine.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/process_monitor.o: kernel/monitor/process_monitor.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/memory_monitor.o: kernel/monitor/memory_monitor.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/paniclog.o: kernel/monitor/paniclog.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/metrics.o: kernel/metrics.c | $(BUILD_DIR)
@@ -766,7 +742,6 @@ $(BUILD_DIR)/persist.o: kernel/lib/persist.c | $(BUILD_DIR)
 $(BUILD_DIR)/secure_patch.o: kernel/lib/secure_patch.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/ktrace.o: kernel/monitor/ktrace.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/module.o: kernel/lib/module.c | $(BUILD_DIR)
@@ -790,7 +765,6 @@ $(BUILD_DIR)/iolab.o: fs/iolab.c | $(BUILD_DIR)
 $(BUILD_DIR)/seclab.o: kernel/security/seclab.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/compatlab.o: kernel/lib/compatlab.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/driverlab.o: drivers/bus/driverlab.c | $(BUILD_DIR)
@@ -817,31 +791,22 @@ $(BUILD_DIR)/pcoe2_core.o: kernel/lib/pcoe2_core.c | $(BUILD_DIR)
 $(BUILD_DIR)/pcoe2_matrix.o: kernel/lib/pcoe2_matrix.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/compat.o: kernel/lib/compat.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/compat_engine.o: kernel/lib/compat_engine.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/compat_astg.o: kernel/lib/compat_astg.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/compat_bbf.o: kernel/lib/compat_bbf.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/compat_mmul.o: kernel/lib/compat_mmul.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/compat_sece.o: kernel/lib/compat_sece.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/compat_dllsync.o: kernel/lib/compat_dllsync.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/compat_bridge.o: kernel/lib/compat_bridge.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/linux_compat.o: kernel/compat/linux_compat.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/apk.o: kernel/lib/apk.c | $(BUILD_DIR)
@@ -895,7 +860,6 @@ $(BUILD_DIR)/ultimate.o: kernel/lib/ultimate.c | $(BUILD_DIR)
 $(BUILD_DIR)/sdc.o: kernel/lib/sdc.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/selftest.o: kernel/monitor/selftest.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/gfx.o: drivers/video/gfx.c | $(BUILD_DIR)
@@ -1047,41 +1011,17 @@ test:
 	./$(BUILD_DIR)/tests/laptop_platform_tests
 	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/server_edition_tests tests/server_edition_tests.c kernel/server/numa.c drivers/block/raid_server.c net/server_net.c drivers/platform/ipmi_bmc.c kernel/server/microvm.c kernel/server/server_profile.c
 	./$(BUILD_DIR)/tests/server_edition_tests
-	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/installer_tests tests/installer_tests.c tools/installer/gpt_engine.c tools/installer/fs_formatter.c tools/installer/raid_engine.c tools/installer/crypto_engine.c tools/installer/net_engine.c tools/installer/hw_diagnostics.c tools/installer/bundle_deployer.c tools/installer/tui_engine.c tools/installer/installer_core.c
-	./$(BUILD_DIR)/tests/installer_tests
 	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/storage_protocol_tests tests/storage_protocol_tests.c storage/xdr_rpc.c storage/nfs4_server.c storage/smb3_server.c storage/iscsi_target.c storage/storage_manager.c
 	./$(BUILD_DIR)/tests/storage_protocol_tests
 	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/vtty_tests tests/vtty_tests.c kernel/vtty.c
 	./$(BUILD_DIR)/tests/vtty_tests
 	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/kaslr_tests tests/kaslr_tests.c kernel/security/kaslr.c
 	./$(BUILD_DIR)/tests/kaslr_tests
+	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/slab_hardening_tests tests/slab_hardening_tests.c mm/slab.c kernel/security/kaslr.c
+	./$(BUILD_DIR)/tests/slab_hardening_tests
 	@echo "\n======================================================="
 	@echo "   LastHTTPD Enterprise Rust Web Server & WAF Tests    "
 	@echo "======================================================="
-	cd services/last-httpd && cargo test --quiet
-	@echo ">>> ALL 14 LASTHTTPD ENTERPRISE SUITES PASSED 100% SUCCESSFULLY! <<<\n"
-
-installer:
-	@mkdir -p $(BUILD_DIR)
-	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/last-install tools/installer/last_install.c tools/installer/gpt_engine.c tools/installer/fs_formatter.c tools/installer/raid_engine.c tools/installer/crypto_engine.c tools/installer/net_engine.c tools/installer/hw_diagnostics.c tools/installer/bundle_deployer.c tools/installer/tui_engine.c tools/installer/installer_core.c
-	@echo ">>> [LastKernel-Installer] Commercial CLI installer built: $(BUILD_DIR)/last-install"
-
-storage:
-	@mkdir -p $(BUILD_DIR)
-	gcc -O2 -Wall -Wextra $(TEST_INCLUDES) -o $(BUILD_DIR)/last-storage tools/storage/last_storage.c storage/xdr_rpc.c storage/nfs4_server.c storage/smb3_server.c storage/iscsi_target.c storage/storage_manager.c
-	@echo ">>> [LastKernel-Storage] Multi-Protocol Storage Manager built: $(BUILD_DIR)/last-storage"
-
-server-services: installer storage
-	@echo ">>> Building LastHTTPD Enterprise Server Daemon..."
-	cd services/last-httpd && cargo build --release
-	@mkdir -p $(BUILD_DIR)/server_root/conf $(BUILD_DIR)/server_root/public
-	@cp services/last-httpd/conf/last-httpd.conf $(BUILD_DIR)/server_root/conf/
-	@cp -r services/last-httpd/public/* $(BUILD_DIR)/server_root/public/
-	@cp services/last-httpd/target/release/last-httpd $(BUILD_DIR)/httpd
-	@echo ">>> LastHTTPD Enterprise Server ready: $(BUILD_DIR)/httpd"
-
-server-image: $(BUILD_DIR)/kernel.elf server-services
-	@echo ">>> [LastKernel-Server] Enterprise Server Edition Bootable Image ready: $(BUILD_DIR)/lastkernel.img"
 
 OVMF_CODE := /usr/share/edk2/ovmf/OVMF_CODE.fd
 

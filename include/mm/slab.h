@@ -21,6 +21,7 @@ kmem_cache_t* kmem_cache_create(const char* name, size_t size, size_t align, u32
 void* kmem_cache_alloc(kmem_cache_t* cache);
 void kmem_cache_free(kmem_cache_t* cache, void* obj);
 int kmem_cache_destroy(kmem_cache_t* cache);
+void slab_hardening_get_stats(u32* out_corruptions, u32* out_double_frees);
 
 /* Predefined Kernel Descriptors Caches */
 extern kmem_cache_t* g_task_struct_cache;

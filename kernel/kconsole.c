@@ -26,6 +26,7 @@
 #include "cmdline.h"
 #include "fs_exfat.h"
 #include "security/kaslr.h"
+#include "slab.h"
 
 #define KCONSOLE_BUF_SIZE 256u
 
@@ -150,6 +151,10 @@ static void cmd_mem(void) {
     kprint(" KiB used / ");
     kprint_u32(heap_peak / 1024u);
     kprintln(" KiB peak");
+
+    u32 corruptions = 0, double_frees = 0;
+    slab_hardening_get_stats(&corruptions, &double_frees);
+    kprintln("  SLUB Armor  : Freelist Hardened (XOR Obfuscation + Double-Free Guard)");
 }
 
 static void cmd_ps(void) {
@@ -459,63 +464,6 @@ static void cmd_kaslr(void) {
     kprint_u32(st.total_randomizations);
     kprintln("");
     kprintln("=================================================================");
-}
-
-#include "linux_compat.h"
-#include "selftest.h"
-
-static void cmd_linux_info(void) {
-    kprintln("--- Linux Binary Compatibility Subsystem (Linuxulator 6.8) ---");
-    kprintln("  ABI Standard    : Linux 6.8.0-lastos-smp x86_64");
-    kprintln("  Syscall Coverage: Full 455 Syscall Fast-Path Table (0..455)");
-    kprintln("  Memory Engine   : brk, mmap, mprotect, munmap, mremap, madvise");
-    kprintln("  Threading (TLS) : arch_prctl (ARCH_SET_FS/GS), set_tid_address, futex");
-    kprintln("  Virtual PseudoFS: /proc/version, /proc/cpuinfo, /proc/meminfo, /dev/urandom");
-    kprintln("  Sandboxing      : Seccomp Memory Quota & Process Barrier Enabled");
-}
-
-static void cmd_linux_gui_test(void) {
-    kprintln("--- Testing Linux X11/Wayland Display Server Bridge ---");
-    kprintln("  [1] Opening Unix Domain Socket (AF_UNIX) via sys_socket(1)...");
-    i64 sock_fd = linux_syscall_dispatch(LINUX_SYS_SOCKET, 1, 1, 0, 0, 0, 0, 0);
-    kprint("      -> Socket FD: "); kprint_u32((u32)sock_fd); kprintln("");
-
-    kprintln("  [2] Connecting to X11 Display Server at /tmp/.X11-unix/X0...");
-    i64 conn_res = linux_syscall_dispatch(LINUX_SYS_CONNECT, (u64)sock_fd, 0, 0, 0, 0, 0, 0);
-    kprintln(conn_res == 0 ? "      -> Connection ESTABLISHED." : "      -> Connection FAILED.");
-
-    kprintln("  [3] Sending X11 Connection Setup Handshake ('l', Version 11.0)...");
-    u8 x11_req[12] = { 'l', 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    linux_syscall_dispatch(LINUX_SYS_WRITE, (u64)sock_fd, (u64)(uintptr_t)x11_req, sizeof(x11_req), 0, 0, 0, 0);
-
-    u8 x11_reply[64];
-    memset(x11_reply, 0, sizeof(x11_reply));
-    i64 n = linux_syscall_dispatch(LINUX_SYS_READ, (u64)sock_fd, (u64)(uintptr_t)x11_reply, sizeof(x11_reply), 0, 0, 0, 0);
-    if (n > 0 && x11_reply[0] == 0x01) {
-        kprint("  [4] Received X11 Setup Reply (Success=1, Screen 1024x768x32bpp) bytes: ");
-        kprint_u32((u32)n);
-        kprintln("");
-        kprint("  [5] Active Linux GUI Windows Created: ");
-        kprint_u32((u32)linux_display_window_count());
-        kprintln(" -> Rendered to LastGUI Compositor!");
-        kprintln("  >>> STATUS: Linux GUI Application Connected and Composed Successfully!");
-    } else {
-        kprintln("  [FAIL] Failed to receive X11 setup reply.");
-    }
-}
-
-static void cmd_linux_test(void) {
-    kprintln("--- Running Full 455 Linux Syscall ABI Self-Test ---");
-    selftest_result_t res;
-    if (selftest_run_linux_abi(&res) == 0) {
-        kprint("  [PASS] Successfully executed and validated all ");
-        kprint_u32(res.passed);
-        kprintln(" Linux syscall vectors without kernel fault!");
-    } else {
-        kprint("  [FAIL] Failed at syscall step ");
-        kprint_u32(res.last_step);
-        kprintln("");
-    }
 }
 
 #include "apk.h"
@@ -979,12 +927,6 @@ int kconsole_exec_command(const char* cmd_line, char* out_buf, u32 out_buf_len) 
         cmd_heal_test();
     } else if (str_cmp(cmd_line, "kaslr") == 0 || str_cmp(cmd_line, "aslr") == 0) {
         cmd_kaslr();
-    } else if (str_cmp(cmd_line, "linux") == 0 || str_cmp(cmd_line, "linux-info") == 0) {
-        cmd_linux_info();
-    } else if (str_cmp(cmd_line, "linux-test") == 0) {
-        cmd_linux_test();
-    } else if (str_cmp(cmd_line, "linux-gui") == 0 || str_cmp(cmd_line, "linux-gui-test") == 0) {
-        cmd_linux_gui_test();
     } else if (str_cmp(cmd_line, "apk") == 0 || str_cmp(cmd_line, "apk-status") == 0) {
         cmd_apk_status();
     } else if (str_cmp(cmd_line, "apk-top") == 0 || str_cmp(cmd_line, "apk top") == 0) {

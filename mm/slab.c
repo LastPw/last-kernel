@@ -5,15 +5,20 @@
 #include "string.h"
 #include "serial.h"
 #include "rust_bridge.h"
+#include "security/kaslr.h"
 
-#define SLAB_PAGE_SIZE      4096u
+#ifdef HOST_TEST
+#include <stdio.h>
+#endif
+
+#define SLAB_PAGE_SIZE      4096ULL
 #define SLAB_MAGIC          0x534C4142u /* "SLAB" */
 #define BIG_ALLOC_MAGIC     0x42494741u /* "BIGA" */
 #define MAX_KMEM_CACHES     32u
 #define NUM_GENERAL_CACHES  8u
 
 typedef struct slab_obj {
-    struct slab_obj* next;
+    void* next_encoded;
 } slab_obj_t;
 
 typedef struct kmem_slab kmem_slab_t;
@@ -23,7 +28,7 @@ struct kmem_slab {
     kmem_cache_t* cache;
     u16           total_objs;
     u16           free_objs;
-    slab_obj_t*   freelist;
+    void*         freelist;     /* Obfuscated pointer to first free object */
     kmem_slab_t*  next;
     kmem_slab_t*  prev;
 };
@@ -37,6 +42,9 @@ struct kmem_cache {
     u32          objs_per_slab;
     u32          total_objs;
     u32          active_objs;
+    u64          random_cookie;          /* 64-bit secret for freelist XOR obfuscation */
+    u32          corruptions_detected;   /* Telemetry: blocked heap corruptions */
+    u32          double_frees_blocked;   /* Telemetry: blocked double-frees */
     kmem_slab_t* slabs_partial;
     kmem_slab_t* slabs_full;
     kmem_slab_t* slabs_free;
@@ -54,6 +62,8 @@ static const u32 s_general_sizes[NUM_GENERAL_CACHES] = {
     16u, 32u, 64u, 128u, 256u, 512u, 1024u, 2048u
 };
 static kmem_cache_t* s_general_caches[NUM_GENERAL_CACHES];
+static u32 s_global_corruptions_detected = 0;
+static u32 s_global_double_frees_blocked = 0;
 
 kmem_cache_t* g_task_struct_cache = 0;
 kmem_cache_t* g_file_cache = 0;
@@ -61,6 +71,22 @@ kmem_cache_t* g_file_cache = 0;
 static u32 align_up(u32 val, u32 align) {
     if (align == 0) return val;
     return (val + align - 1) & ~(align - 1);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ *  SLUB Freelist Hardening — Fast XOR Pointer Obfuscation
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+static inline void* freelist_ptr_encode(const kmem_cache_t* cache, void* ptr_val, uintptr_t obj_addr) {
+    uintptr_t p = (uintptr_t)ptr_val;
+    uintptr_t cookie = (uintptr_t)cache->random_cookie;
+    return (void*)(p ^ obj_addr ^ cookie);
+}
+
+static inline void* freelist_ptr_decode(const kmem_cache_t* cache, void* encoded_val, uintptr_t obj_addr) {
+    uintptr_t e = (uintptr_t)encoded_val;
+    uintptr_t cookie = (uintptr_t)cache->random_cookie;
+    return (void*)(e ^ obj_addr ^ cookie);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -90,6 +116,13 @@ kmem_cache_t* kmem_cache_create(const char* name, size_t size, size_t align, u32
             c->align = (u32)align;
             c->flags = flags;
 
+            /* Generate independent 64-bit hardening cookie from KASLR entropy */
+            u64 cookie = kaslr_gen_random_range(0x10000000ULL, 0xFFFFFFFFFFFFFFFFULL, 1);
+            if (cookie == 0) cookie = 0x9E3779B97F4A7C15ULL ^ ((u64)(uintptr_t)c << 13);
+            c->random_cookie = cookie;
+            c->corruptions_detected = 0;
+            c->double_frees_blocked = 0;
+
             u32 hdr_size = align_up(sizeof(kmem_slab_t), (u32)align);
             c->objs_per_slab = (SLAB_PAGE_SIZE > hdr_size) ? ((SLAB_PAGE_SIZE - hdr_size) / aligned_obj) : 0;
             return c;
@@ -114,12 +147,15 @@ static kmem_slab_t* slab_grow(kmem_cache_t* cache) {
     u32 hdr_size = align_up(sizeof(kmem_slab_t), cache->align);
     u8* obj_base = (u8*)page + hdr_size;
 
-    slab->freelist = 0;
+    void* cur_free = 0;
     for (u32 i = 0; i < cache->objs_per_slab; i++) {
         slab_obj_t* obj = (slab_obj_t*)(obj_base + (i * cache->obj_size));
-        obj->next = slab->freelist;
-        slab->freelist = obj;
+        obj->next_encoded = freelist_ptr_encode(cache, cur_free, (uintptr_t)obj);
+        cur_free = (void*)obj;
     }
+
+    /* Set head of freelist on the slab */
+    slab->freelist = freelist_ptr_encode(cache, cur_free, (uintptr_t)slab);
 
     /* Link into slabs_free list */
     slab->next = cache->slabs_free;
@@ -144,10 +180,33 @@ void* kmem_cache_alloc(kmem_cache_t* cache) {
         if (!slab) return 0;
     }
 
-    /* Remove object from slab freelist */
-    slab_obj_t* obj = slab->freelist;
+    /* Decode and validate head of freelist */
+    slab_obj_t* obj = (slab_obj_t*)freelist_ptr_decode(cache, slab->freelist, (uintptr_t)slab);
     if (!obj) return 0;
-    slab->freelist = obj->next;
+
+    uintptr_t slab_page = (uintptr_t)slab & ~(uintptr_t)(SLAB_PAGE_SIZE - 1);
+    uintptr_t obj_page = (uintptr_t)obj & ~(uintptr_t)(SLAB_PAGE_SIZE - 1);
+    if (obj_page != slab_page || ((uintptr_t)obj & (cache->align - 1)) != 0) {
+        serial_writeln("[SLAB SECURITY] CRITICAL: Freelist head corruption detected! Exploit blocked.");
+        cache->corruptions_detected++;
+        s_global_corruptions_detected++;
+        return 0;
+    }
+
+    /* Decode and validate next free object */
+    void* next_obj = freelist_ptr_decode(cache, obj->next_encoded, (uintptr_t)obj);
+    if (next_obj) {
+        uintptr_t next_page = (uintptr_t)next_obj & ~(uintptr_t)(SLAB_PAGE_SIZE - 1);
+        if (next_page != slab_page || ((uintptr_t)next_obj & (cache->align - 1)) != 0) {
+            serial_writeln("[SLAB SECURITY] CRITICAL: Inner freelist corruption detected! Exploit blocked.");
+            cache->corruptions_detected++;
+            s_global_corruptions_detected++;
+            return 0;
+        }
+    }
+
+    /* Update slab freelist head */
+    slab->freelist = freelist_ptr_encode(cache, next_obj, (uintptr_t)slab);
     slab->free_objs--;
     cache->active_objs++;
 
@@ -188,9 +247,25 @@ void kmem_cache_free(kmem_cache_t* cache, void* obj) {
         return;
     }
 
+    /* Verify object alignment and containment */
+    if (((uintptr_t)obj & (cache->align - 1)) != 0) {
+        serial_writeln("[SLAB SECURITY] ERROR: Misaligned object pointer passed to kfree!");
+        return;
+    }
+
+    /* Double-Free Check: check if obj is already at the head of the freelist */
+    void* cur_head = freelist_ptr_decode(cache, slab->freelist, (uintptr_t)slab);
+    if (cur_head == obj) {
+        serial_writeln("[SLAB SECURITY] CRITICAL: Immediate Double-Free detected and blocked!");
+        cache->double_frees_blocked++;
+        s_global_double_frees_blocked++;
+        return;
+    }
+
+    /* Prepend freed object to the hardened freelist */
     slab_obj_t* slab_obj = (slab_obj_t*)obj;
-    slab_obj->next = slab->freelist;
-    slab->freelist = slab_obj;
+    slab_obj->next_encoded = freelist_ptr_encode(cache, cur_head, (uintptr_t)obj);
+    slab->freelist = freelist_ptr_encode(cache, (void*)slab_obj, (uintptr_t)slab);
     slab->free_objs++;
     if (cache->active_objs > 0) cache->active_objs--;
 
@@ -352,4 +427,9 @@ int slab_class_stats(u32 idx, slab_class_stats_t* out) {
     out->free_objects = c->total_objs - c->active_objs;
     out->regions = (c->total_objs > 0 && c->objs_per_slab > 0) ? (c->total_objs / c->objs_per_slab) : 0;
     return 0;
+}
+
+void slab_hardening_get_stats(u32* out_corruptions, u32* out_double_frees) {
+    if (out_corruptions) *out_corruptions = s_global_corruptions_detected;
+    if (out_double_frees) *out_double_frees = s_global_double_frees_blocked;
 }
