@@ -1053,6 +1053,8 @@ test:
 	./$(BUILD_DIR)/tests/storage_protocol_tests
 	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/vtty_tests tests/vtty_tests.c kernel/vtty.c
 	./$(BUILD_DIR)/tests/vtty_tests
+	gcc -O2 -Wall -Wextra -DHOST_TEST $(TEST_INCLUDES) -o $(BUILD_DIR)/tests/kaslr_tests tests/kaslr_tests.c kernel/security/kaslr.c
+	./$(BUILD_DIR)/tests/kaslr_tests
 	@echo "\n======================================================="
 	@echo "   LastHTTPD Enterprise Rust Web Server & WAF Tests    "
 	@echo "======================================================="

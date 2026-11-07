@@ -12,6 +12,10 @@
 #ifdef HOST_TEST
 #include <string.h>
 #include <stdio.h>
+static inline void serial_write(const char* s) { (void)s; }
+static inline void serial_writeln(const char* s) { (void)s; }
+static inline void serial_write_hex(u64 v) { (void)v; }
+static inline void serial_write_dec(u32 v) { (void)v; }
 #else
 #include "string.h"
 #include "serial.h"
