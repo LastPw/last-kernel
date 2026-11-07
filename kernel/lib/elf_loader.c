@@ -23,7 +23,7 @@
 #define ELF_MAX_MAPPED_PAGES 1024u
 #define ELF_MAX_HEAP_ALLOCS 1024u
 /* Heap grows down from just below the top of the 64-bit user range. */
-#define USER_HEAP_BASE 0x4000000000ull   /* 256 GiB — far inside user VMA (2^38) */
+#define USER_HEAP_BASE 0x0000020000000000ull   /* 2 TiB — inside user VMA [USER_VIRT_BASE, USER_VIRT_LIMIT) */
 #define USER_HEAP_LIMIT 0x0000800000000000ull
 
 typedef struct __attribute__((packed)) {
@@ -300,6 +300,16 @@ static int map_segment_page(u64 va, u32 flags, elf_process_image_t* image, u32* 
     memset((void*)paging_phys_to_virt((u64)frame), 0, ELF_PAGE);
     if (paging_map_page(page, (u64)frame, flags | PAGE_FLAG_PRESENT | PAGE_FLAG_USER) != 0) {
         serial_writeln("[elf] map: paging_map_page failed");
+        serial_write("[elf] map fail va=0x");
+        serial_write_hex((u32)(page >> 32));
+        serial_write_hex((u32)(page & 0xFFFFFFFFu));
+        serial_write(" space=");
+        serial_write_dec(paging_space_current());
+        serial_write(" flags=0x");
+        serial_write_hex(flags);
+        serial_write(" free_frames=");
+        serial_write_dec(frame_total() - frame_used());
+        serial_putc('\n');
         frame_free(frame);
         image_release_page(image);
         return -1;
@@ -514,13 +524,6 @@ int elf32_user_free(u32 task_id, u64 ptr) {
 
 int elf32_load_user(const u8* image, u32 image_len, u32 task_id, elf_exec_info_t* out) {
     elf_view_t v;
-    serial_write("[elf] load_user enter task=");
-    serial_write_dec(task_id);
-    serial_write(" len=");
-    serial_write_dec(image_len);
-    serial_write(" img=");
-    serial_write_hex((u32)((unsigned long)image & 0xFFFFFFFFu));
-    serial_putc('\n');
     if (!out || !elf_image_valid(image, image_len, &v)) {
         serial_writeln("[LastOS] elf load: validation failed");
         return -1;
@@ -536,9 +539,6 @@ int elf32_load_user(const u8* image, u32 image_len, u32 task_id, elf_exec_info_t
     }
     owner->space_id = (u32)space;
     owner->heap_next = USER_HEAP_BASE;
-    serial_write("[elf] space=");
-    serial_write_dec(space);
-    serial_putc('\n');
     if (paging_space_switch((u32)space) != 0) {
         serial_writeln("[elf] space_switch failed");
         image_release(owner);
@@ -549,11 +549,6 @@ int elf32_load_user(const u8* image, u32 image_len, u32 task_id, elf_exec_info_t
         image_release(owner);
         return -1;
     }
-    serial_write("[elf] segments=");
-    serial_write_dec(v.segments);
-    serial_write(" entry=0x");
-    serial_write_hex((u32)(v.entry >> 12));
-    serial_putc('\n');
 
     memset(out, 0, sizeof(*out));
     out->entry = v.entry;
@@ -577,25 +572,11 @@ int elf32_load_user(const u8* image, u32 image_len, u32 task_id, elf_exec_info_t
             ptype = p->type; pflags = p->flags; pvaddr = p->vaddr; poffset = p->offset;
             pfilesz = p->filesz; pmemsz = p->memsz;
         }
-        serial_write("[elf] phdr i=");
-        serial_write_dec(i);
-        serial_write(" type=");
-        serial_write_dec(ptype);
-        serial_write(" pflags=0x");
-        serial_write_hex(pflags);
-        serial_write(" vaddr=0x");
-        serial_write_hex((u32)(pvaddr >> 32));
-        serial_putc('\n');
         if (ptype != ELF_PT_LOAD) continue;
         /* Always map as RW during load so the initial memcpy can write the
            file contents.  Exec-only pages are tightened after copying. */
         u32 flags = PAGE_FLAG_RW;
         if (pflags & 1u) flags |= PAGE_FLAG_EXEC;
-        serial_write("[elf] mapseg i=");
-        serial_write_dec(i);
-        serial_write(" pflags=0x");
-        serial_write_hex(pflags);
-        serial_putc('\n');
         u64 first = pvaddr & ~0xFFFull;
         u64 last = (pvaddr + pmemsz + ELF_PAGE - 1u) & ~0xFFFull;
         for (u64 va = first; va < last; va += ELF_PAGE) {
@@ -616,25 +597,7 @@ int elf32_load_user(const u8* image, u32 image_len, u32 task_id, elf_exec_info_t
         if ((pflags & 2u) == 0u) {
             for (u64 va = first; va < last; va += ELF_PAGE) {
                 u32 pf = paging_get_page_flags(va);
-                if (va >= USER_VIRT_BASE && va < (USER_VIRT_BASE + 0x100000000ull)) {
-                    serial_write("[elf] tighten va=0x");
-                    serial_write_hex((u32)(va >> 12));
-                    serial_write(" pf=0x");
-                    serial_write_hex(pf);
-                    serial_write(" cr3=0x");
-                    serial_write_hex((u32)(paging_cr3() >> 12));
-                    serial_putc('\n');
-                }
                 paging_set_page_flags(va, (pf & ~(u32)PAGE_FLAG_RW));
-                if (va >= USER_VIRT_BASE && va < (USER_VIRT_BASE + 0x100000000ull)) {
-                    serial_write("[elf] tighten-after va=0x");
-                    serial_write_hex((u32)(va >> 12));
-                    serial_write(" pf=0x");
-                    serial_write_hex(paging_get_page_flags(va));
-                    serial_write(" cr3=0x");
-                    serial_write_hex((u32)(paging_cr3() >> 12));
-                    serial_putc('\n');
-                }
             }
         }
     }

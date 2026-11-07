@@ -126,6 +126,7 @@ int scheduler_prepare_fork_task(u32 task_id, const registers_t* parent_regs, u32
 int scheduler_set_address_space(u32 task_id, u32 address_space);
 u32 scheduler_task_address_space(u32 task_id);
 int scheduler_exit_task(u32 task_id, i32 exit_code);
+int scheduler_defer_user_exit(u32 task_id, i32 exit_code);
 int scheduler_reap_task(u32 task_id);
 int scheduler_current_user_frame(registers_t* out);
 int scheduler_task_is_user(u32 task_id);

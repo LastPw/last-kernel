@@ -163,6 +163,7 @@ C_OBJS := \
 	$(BUILD_DIR)/spinlock.o \
 	$(BUILD_DIR)/rcu.o \
 	$(BUILD_DIR)/security.o \
+	$(BUILD_DIR)/kaslr.o \
 	$(BUILD_DIR)/memory_protect.o \
 	$(BUILD_DIR)/task_protect.o \
 	$(BUILD_DIR)/irq_sanitizer.o \
@@ -670,6 +671,9 @@ $(BUILD_DIR)/rcu.o: kernel/sync/rcu.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/security.o: kernel/security/security.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kaslr.o: kernel/security/kaslr.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/memory_protect.o: kernel/security/memory_protect.c | $(BUILD_DIR)

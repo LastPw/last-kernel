@@ -1,15 +1,22 @@
+/*
+ * =============================================================================
+ * Author: Taha Vaziry
+ * File: timer.c
+ * Purpose: High-precision system timer, PIT/LAPIC management, and safe delay loops
+ * =============================================================================
+ */
+
 #include "timer.h"
 #include "io.h"
 #include "scheduler.h"
 #include "kernel_monitor.h"
+#include "lastmap.h"
 #include "nic.h"
-#include "bluetooth.h"
-#include "laptop_platform.h"
-#include "ipmi_bmc.h"
 #include "netstack.h"
 #include "resource_monitor.h"
 #include "self_heal.h"
 #include "sdc.h"
+#include "lastshark.h"
 #include "antivirus.h"
 #include "ai_security.h"
 #include "hal.h"
@@ -23,7 +30,6 @@
 #include "apic.h"
 #include "interrupts.h"
 #include "serial.h"
-#include "power.h"
 
 static u32 ticks = 0;
 static u32 frequency = 100;
@@ -103,6 +109,11 @@ static void timer_runtime_promote_features(void) {
     }
 
     next &= runtime_target_features;
+    /* Late bring-up clears every runtime feature while the boot stack is in
+       use.  Restore the baseline too: the old code only promoted optional
+       features, so SCHED and MONITOR stayed off forever and no timer interrupt
+       could perform the requested initial ring-3 switch. */
+    next |= runtime_target_features & (TIMER_FEAT_SCHED | TIMER_FEAT_MONITOR);
 
     if ((runtime_target_features & TIMER_FEAT_NET) && ticks >= 200u) {
         next |= TIMER_FEAT_NET;
@@ -129,24 +140,10 @@ static void timer_runtime_promote_features(void) {
 void timer_on_irq(registers_t* regs) {
     ticks++;
 
-    if ((ticks & 0x3FFu) == 0u) {
-        serial_write("[timer] on_irq ticks=");
-        serial_write_dec(ticks);
-        serial_write(" ready=");
-        serial_write_dec(runtime_ready);
-        serial_write(" in_tick=");
-        serial_write_dec(in_tick);
-        serial_putc('\n');
-    }
     if (!runtime_ready) {
         return;
     }
     if (in_tick) {
-        if ((ticks & 0x3FFu) == 0u) {
-            serial_write("[timer] in_tick stuck t=");
-            serial_write_dec(ticks);
-            serial_putc('\n');
-        }
         return;
     }
     in_tick = 1;
@@ -165,7 +162,6 @@ void timer_on_irq(registers_t* regs) {
     if (feature_on(TIMER_FEAT_RESOURCE) && (ticks % 10u) == 0u) {
         resource_monitor_tick();
         watchdog_tick();
-        power_check_events();
     }
     if (feature_on(TIMER_FEAT_SECURITY) && (ticks % 20u) == 0u) {
         self_heal_tick();
@@ -183,13 +179,10 @@ void timer_on_irq(registers_t* regs) {
         ultimate_tick();
         pcoe2_tick();
         ukernel_tick();
-        bluetooth_tick();
-        acpi_ec_poll();
-        battery_sbs_poll();
-        laptop_vendors_poll();
-        backlight_als_poll();
-        cpu_power_poll();
-        ipmi_bmc_poll();
+    }
+    if (feature_on(TIMER_FEAT_SCANNERS) && (ticks % 50u) == 0u) {
+        lastmap_tick();
+        lastshark_tick();
     }
 
     in_tick = 0;
@@ -201,15 +194,6 @@ u8 timer_using_lapic(void) {
 
 u32 timer_lapic_init_count(void) {
     return lapic_timer_init_count;
-}
-
-void timer_delay_ms(u32 ms) {
-    u32 start = ticks;
-    u32 wait_ticks = (ms * frequency + 999u) / 1000u;
-    if (wait_ticks == 0) wait_ticks = 1;
-    while ((ticks - start) < wait_ticks) {
-        asm volatile("pause");
-    }
 }
 
 u32 timer_ticks(void) {
@@ -240,19 +224,31 @@ u32 timer_runtime_features(void) {
 }
 
 void timer_runtime_set_target_features(u32 feature_mask) {
-    runtime_target_features = (feature_mask & TIMER_FEAT_ALL) | TIMER_FEAT_SCHED;
-    /* SCHED is the scheduler heartbeat: it must never be dropped once the
-       runtime goes live, or the scheduler starves. Re-arm it immediately
-       instead of waiting for the promote pass (which never re-enables it). */
-    runtime_features = (runtime_features & runtime_target_features) | TIMER_FEAT_SCHED;
+    runtime_target_features = feature_mask & TIMER_FEAT_ALL;
+    runtime_features &= runtime_target_features;
 }
 
 u32 timer_runtime_target_features(void) {
     return runtime_target_features;
 }
 
-unsigned long time(unsigned long *tloc) {
-    unsigned long now = 1710000000UL + (unsigned long)(ticks / 100);
-    if (tloc) *tloc = now;
-    return now;
+__attribute__((weak)) void lastmap_tick(void) {}
+__attribute__((weak)) void lastshark_tick(void) {}
+
+void timer_delay_ms(u32 ms) {
+    u64 flags;
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(flags));
+    if ((flags & 0x200ull) == 0) {
+        /* Interrupts are disabled; ticks will never advance. Use CPU pause loop */
+        for (volatile u32 i = 0; i < ms * 40000u; i++) {
+            asm volatile("pause");
+        }
+        return;
+    }
+    u32 start = ticks;
+    u32 wait_ticks = (ms * frequency + 999u) / 1000u;
+    if (wait_ticks == 0) wait_ticks = 1;
+    while ((ticks - start) < wait_ticks) {
+        asm volatile("pause");
+    }
 }

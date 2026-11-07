@@ -1,3 +1,13 @@
+/*
+ * =============================================================================
+ * Author: Taha Vaziry
+ * File: scheduler.c
+ * Purpose: Preemptive Multitasking Scheduler, Anti-Monopolization & Context Hardening
+ * =============================================================================
+ */
+
+#include "mem_sched_harden.h"
+#include "mem_sched_harden.inc"
 #include "scheduler.h"
 #include "string.h"
 #include "multicore_scheduler.h"
@@ -38,7 +48,7 @@
 #define TASK_CLASS_IO  1
 #define TASK_CLASS_NET 2
 #define TASK_USER_BASE USER_VIRT_BASE
-#define TASK_USER_SPAN 0x00200000u
+#define TASK_USER_SPAN 0x01000000u /* 16 MiB virtual address span per user task */
 
 typedef struct {
     u32 id;
@@ -137,6 +147,8 @@ static u8 kernel_resume_pending = 0u;
 extern u8 boot_stack_top;
 extern u8 kernel_resume_trampoline;
 static u32 current = 0;
+static u32 deferred_exit_task = 0u;
+static i32 deferred_exit_code = 0;
 static u32 task_count = 0;
 static u32 core_count = 1;
 static u32 current_core = 0;
@@ -159,22 +171,12 @@ static scheduler_policy_stats_t policy_stats;
 static int task_index(u32 task_id);
 
 void scheduler_capture_kernel_context(registers_t* regs) {
-    serial_write("[sched] capture enter cs=");
-    serial_write_dec(regs ? regs->cs : 99u);
-    serial_write(" cur=");
-    serial_write_dec(current);
-    serial_write(" usw=");
-    serial_write_dec(user_switch_requested);
-    serial_putc('\n');
     if (!regs || current != 0u || regs->cs != 0x08u || regs->rip == 0u) return;
     tasks[0].context = *regs;
     scheduler_kernel_return_context = *regs;
     tasks[0].has_context = 1;
     scheduler_idle_kernel_frame_ptr = (u64)(unsigned long)regs + 120u;
     kernel_context_frozen = 1u;
-    serial_write("[LastOS] kernel frame captured rip=");
-    serial_write_dec(regs->rip);
-    serial_putc('\n');
 }
 
 /* The assembly return trampoline starts the shell on a fresh kernel stack.
@@ -191,7 +193,6 @@ void scheduler_begin_kernel_resume(void) {
 }
 
 void scheduler_request_user_switch(void) {
-    serial_write("[sched] req_user_switch usw=1 frozen=0\n");
     user_switch_requested = 1u;
     kernel_context_frozen = 0u;
 }
@@ -211,8 +212,16 @@ static void scheduler_apply_user_syscall_policy(u32 task_id) {
         KSYSCALL_GFX_INFO, KSYSCALL_GFX_MODE, KSYSCALL_GFX_CLEAR,
         KSYSCALL_GFX_RECT, KSYSCALL_GFX_TEXT, KSYSCALL_GFX_EXIT,
         KSYSCALL_GFX_BLIT, KSYSCALL_INPUT_READ,
+        /* The allowlist is deny-by-default and syscall_policy_allowed() gates
+           the dispatcher, so every omission is a silent -1 in ring 3.  These
+           were missing: the desktop shell polled the pointer every frame and
+           got a denial each time, which is why the cursor never tracked. */
+        KSYSCALL_GFX_ROUND_RECT, KSYSCALL_MOUSE_READ, KSYSCALL_SHELL_EXEC,
+        KSYSCALL_CLOCK_GETTIME, KSYSCALL_NANOSLEEP,
         KSYSCALL_THREAD_CREATE, KSYSCALL_SIGACTION, KSYSCALL_SIGRETURN,
-        KSYSCALL_GETPRIO, KSYSCALL_SETPRIO
+        KSYSCALL_GETPRIO, KSYSCALL_SETPRIO,
+        KSYSCALL_HTTP_FETCH, KSYSCALL_DRM_CREATE_BUFFER,
+        KSYSCALL_DRM_PAGE_FLIP, KSYSCALL_DRM_BLIT, KSYSCALL_DRM_DESTROY_BUFFER
     };
     syscall_policy_reset(task_id);
     for (u32 nr = 0u; nr < SYSCALL_POLICY_MAX_NR; nr++) {
@@ -326,8 +335,10 @@ static u32 core_score_for_task(u32 idx, u32 core) {
     sched_queue_decision_t qd = task_queue_decision(idx);
     u32 score = core_load[core] + core_queue_temp[core] + core_temperature[core];
     score += hw_topology_core_temperature(core);
-    if (tasks[idx].home_core == core && score > tasks[idx].cache_heat / 4u) {
-        score -= tasks[idx].cache_heat / 4u;
+    if (tasks[idx].home_core == core) {
+        u32 affinity_bonus = (tasks[idx].cache_heat / 2u) + 16u;
+        if (score > affinity_bonus) score -= affinity_bonus;
+        else score = 0u;
     }
     if (core_last_task[core] == tasks[idx].id && score > 12u) {
         score -= 12u;
@@ -674,7 +685,10 @@ static u32 pick_next_task(u32 now_tick) {
     /* Linux-like policy order: RT -> fast interactive lanes -> fair CFS -> idle.
        Among RT tasks with equal priority, prefer the runnable user (ring-3)
        process over a kernel service task; otherwise the static kernel tasks
-       that stay READY forever would starve every spawned userland binary. */
+       that stay READY forever would starve every spawned userland binary.
+       Equal-priority RT peers then rotate by wait_ticks: picking the lowest
+       task slot forever kept desktop_shell running and starved every later
+       ring-3 process, including Linux-compat executables. */
     for (u32 i = 1; i < task_count; i++) {
         if (!eligible(i, now_tick)) {
             continue;
@@ -686,7 +700,11 @@ static u32 pick_next_task(u32 now_tick) {
                      tasks[i].priority < tasks[best].priority ||
                      (tasks[i].priority == tasks[best].priority &&
                       tasks[i].address_space != PAGING_SPACE_KERNEL &&
-                      tasks[best].address_space == PAGING_SPACE_KERNEL);
+                      tasks[best].address_space == PAGING_SPACE_KERNEL) ||
+                     (tasks[i].priority == tasks[best].priority &&
+                      (tasks[i].address_space != PAGING_SPACE_KERNEL) ==
+                          (tasks[best].address_space != PAGING_SPACE_KERNEL) &&
+                      tasks[i].wait_ticks > tasks[best].wait_ticks);
         if (better) {
             best = i;
             have = 1;
@@ -844,6 +862,9 @@ static void rebalance_affinity(void) {
 }
 
 void scheduler_init(void) {
+    /* Memory & Scheduler Hardening: Initialize subsystem and execute 8-vector defense verification */
+    mem_sched_hardening_init();
+    (void)mem_sched_hardening_selftest();
     task_count = 5;
     pid_state = scheduler_pid_entropy();
     if (pid_state == 0u) pid_state = 0xA53C9E17u;
@@ -949,12 +970,33 @@ void scheduler_set_core_count(u32 count) {
     rust_bridge_sched_tick(0u, 1u);
 }
 
+/* The SYSCALL fast path has no interrupt frame to rewrite.  Defer teardown to
+   the next timer tick so sysret returns while the old stack and address space
+   still exist; the tick then switches directly to another runnable task. */
+int scheduler_defer_user_exit(u32 task_id, i32 exit_code) {
+    int idx = task_index(task_id);
+    if (idx <= 0 || current != (u32)idx || deferred_exit_task != 0u) return -1;
+    deferred_exit_task = task_id;
+    deferred_exit_code = exit_code;
+    tasks[idx].state = TASK_DEAD;
+    return 0;
+}
+
 /* This handler may rewrite the active interrupt frame and select a different
    address space before returning to the assembly stub. Its C stack is not a
    normal call boundary, so a compiler canary cannot survive that transition. */
 __attribute__((no_stack_protector))
 void scheduler_tick(registers_t* regs) {
     if (task_count == 0) {
+        return;
+    }
+    if (deferred_exit_task != 0u) {
+        u32 exiting = deferred_exit_task;
+        i32 code = deferred_exit_code;
+        deferred_exit_task = 0u;
+        (void)scheduler_exit_task(exiting, code);
+        if (regs) scheduler_schedule_from_irq(regs);
+        else scheduler_schedule();
         return;
     }
 
@@ -1090,6 +1132,17 @@ void scheduler_schedule_from_irq(registers_t* regs) {
     if (!regs || task_count == 0) {
         return;
     }
+    /* Scheduler Hardening: Validate context frame registers of current task */
+    (void)sched_harden_validate_context(regs->cs, regs->ss, regs->rsp, tasks[current].id);
+
+    /* During boot the kernel is still constructing the user tasks.  Do not let
+       a timer tick preempt that work into a half-loaded ELF; the initial user
+       transition happens only after kmain or the console explicitly requests
+       it and the kernel continuation has been captured. */
+    if (current == 0u && regs->cs == 0x08u &&
+        !user_switch_requested && !kernel_resume_pending) {
+        return;
+    }
 
     if (current == 0u && regs->cs == 0x08u && user_switch_requested) {
         scheduler_capture_kernel_context(regs);
@@ -1189,19 +1242,6 @@ void scheduler_schedule_from_irq(registers_t* regs) {
     current = next;
     (void)paging_space_switch(tasks[current].address_space);
     scheduler_sync_task_to_rust(current);
-    if (user_switch_requested) {
-        serial_write("[sched] sw to next=");
-        serial_write_dec(next);
-        serial_write(" cs=");
-        serial_write_dec(regs->cs);
-        serial_write(" addrsp=");
-        serial_write_dec(tasks[next].address_space);
-        serial_write(" ctx=");
-        serial_write_dec(tasks[next].has_context);
-        serial_write(" state=");
-        serial_write_dec(tasks[next].state);
-        serial_putc('\n');
-    }
 
     /* When the scheduler keeps the same task, the interrupt frame already
        contains the newest rip/rsp pair.  Replacing it with the cached
@@ -1217,13 +1257,6 @@ void scheduler_schedule_from_irq(registers_t* regs) {
             regs->cs = 0x08;
             regs->rip = KERNEL_VIRT_BASE;
         }
-        serial_write("[sched] final frame cur=");
-        serial_write_dec(current);
-        serial_write(" cs=");
-        serial_write_dec(regs->cs);
-        serial_write(" rip=");
-        serial_write_hex((u32)((unsigned long)regs->rip & 0xFFFFFFFFu));
-        serial_putc('\n');
     }
 
     if (tasks[current].id != 0u) {
@@ -1325,6 +1358,8 @@ int scheduler_create_user_task(const char* name, u32* out_task_id) {
     return 0;
 }
 
+
+
 /* ── Thread creation (shares address space with parent) ───────────────── */
 int scheduler_create_user_thread(u32 parent_task, u64 entry, u64 user_stack,
                                   const char* name, u32* out_task_id) {
@@ -1414,6 +1449,11 @@ int scheduler_create_user_thread(u32 parent_task, u64 entry, u64 user_stack,
     return 0;
 }
 
+int scheduler_create_thread(u32 parent_task, u64 entry, u64 stack_top, u64 arg, u32* out_tid) {
+    (void)arg;
+    return scheduler_create_user_thread(parent_task, entry, stack_top, "thread", out_tid);
+}
+
 int scheduler_prepare_user_task(u32 task_id, u64 entry, u64 user_stack) {
     int idx = task_index(task_id);
     serial_write("[sched] prepare task=");
@@ -1421,9 +1461,11 @@ int scheduler_prepare_user_task(u32 task_id, u64 entry, u64 user_stack) {
     serial_write(" idx=");
     serial_write_dec((u32)idx);
     serial_write(" entry=0x");
-    serial_write_hex((u32)(entry >> 12));
+    serial_write_hex((u32)(entry >> 32));
+    serial_write_hex((u32)(entry & 0xFFFFFFFFu));
     serial_write(" stk=0x");
-    serial_write_hex((u32)(user_stack >> 12));
+    serial_write_hex((u32)(user_stack >> 32));
+    serial_write_hex((u32)(user_stack & 0xFFFFFFFFu));
     serial_putc('\n');
     if (idx <= 0 || entry < USER_VIRT_BASE || entry >= USER_VIRT_LIMIT ||
         user_stack < USER_VIRT_BASE || user_stack >= USER_VIRT_LIMIT) {

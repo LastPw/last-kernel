@@ -7,7 +7,7 @@
 
 #define VM_MAX_REGIONS 256u
 #define VM_PAGE_SIZE 4096u
-#define VM_MAX_REGION_PAGES 256u
+#define VM_MAX_REGION_PAGES 2048u /* 8 MiB per region (16 MiB per task space) */
 #define VM_BITMAP_WORDS (VM_MAX_REGION_PAGES / 32u)
 #define VM_NULL_FRAME 0xFFFFFFFFu
 #define VM_TMP_SRC_VA 0xE0000000u
@@ -123,34 +123,22 @@ static int can_access(const vm_region_t* r, u32 err_code) {
 }
 
 static int zero_phys_frame(u32 pa) {
-    if (pa <= (VM_DIRECT_MAP_LIMIT - VM_PAGE_SIZE) && paging_is_mapped(pa)) {
-        memset((void*)(uintptr_t)pa, 0, VM_PAGE_SIZE);
+    void* pvirt = (void*)paging_phys_to_virt((u64)pa);
+    if (pvirt) {
+        memset(pvirt, 0, VM_PAGE_SIZE);
         return 0;
     }
-    if (paging_map_page(VM_TMP_DST_VA, pa, PAGE_FLAG_RW) != 0) {
-        return -1;
-    }
-    memset((void*)(uintptr_t)VM_TMP_DST_VA, 0, VM_PAGE_SIZE);
-    (void)paging_unmap_page(VM_TMP_DST_VA);
-    return 0;
+    return -1;
 }
 
 static int copy_phys_frame(u32 src_pa, u32 dst_pa) {
-    if (src_pa <= (VM_DIRECT_MAP_LIMIT - VM_PAGE_SIZE) &&
-        dst_pa <= (VM_DIRECT_MAP_LIMIT - VM_PAGE_SIZE) &&
-        paging_is_mapped(src_pa) && paging_is_mapped(dst_pa)) {
-        memmove((void*)(uintptr_t)dst_pa, (const void*)(uintptr_t)src_pa, VM_PAGE_SIZE);
+    void* src_virt = (void*)paging_phys_to_virt((u64)src_pa);
+    void* dst_virt = (void*)paging_phys_to_virt((u64)dst_pa);
+    if (src_virt && dst_virt) {
+        memmove(dst_virt, src_virt, VM_PAGE_SIZE);
         return 0;
     }
-    if (paging_map_page(VM_TMP_SRC_VA, src_pa, 0u) != 0) return -1;
-    if (paging_map_page(VM_TMP_DST_VA, dst_pa, PAGE_FLAG_RW) != 0) {
-        (void)paging_unmap_page(VM_TMP_SRC_VA);
-        return -1;
-    }
-    memmove((void*)(uintptr_t)VM_TMP_DST_VA, (const void*)(uintptr_t)VM_TMP_SRC_VA, VM_PAGE_SIZE);
-    (void)paging_unmap_page(VM_TMP_SRC_VA);
-    (void)paging_unmap_page(VM_TMP_DST_VA);
-    return 0;
+    return -1;
 }
 
 static int find_region_index(u32 task_id, u32 addr) {

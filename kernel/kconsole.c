@@ -25,6 +25,7 @@
 #include "wifi.h"
 #include "cmdline.h"
 #include "fs_exfat.h"
+#include "security/kaslr.h"
 
 #define KCONSOLE_BUF_SIZE 256u
 
@@ -105,6 +106,7 @@ static void cmd_help(void) {
     kprintln("  fsck, lastfs  - Run filesystem integrity check on LastFS 2.0");
     kprintln("  timetravel    - Display KShield Time-Travel & Self-Healing Telemetry");
     kprintln("  heal_test     - Execute live Transactional State Rewind test");
+    kprintln("  kaslr, aslr   - Display Kernel Address Space Layout Randomization status");
     kprintln("  clear, cls    - Clear console screen");
     kprintln("  reboot        - Reset system hardware via ACPI / keyboard controller");
     kprintln("  halt          - Halt CPU execution");
@@ -425,6 +427,38 @@ static void cmd_heal_test(void) {
     } else {
         kprintln("  >>> STATUS: Checkpoint not found.");
     }
+}
+
+static void cmd_kaslr(void) {
+    kprintln("=================== KASLR Security Subsystem ===================");
+    kaslr_status_t st;
+    kaslr_get_status(&st);
+    kprint  ("  KASLR Status      : ");
+    kprintln(st.enabled ? "ACTIVE (Enforced)" : "DISABLED (nokaslr)");
+    kprint  ("  Entropy Source    : ");
+    kprintln(kaslr_entropy_source_name(st.entropy_source));
+    kprint  ("  HHDM Active Base  : 0x");
+    kprint_hex32((u32)(st.actual_hhdm_base >> 32));
+    kprint_hex32((u32)st.actual_hhdm_base);
+    kprint  (" (Slot ");
+    kprint_u32((u32)st.hhdm_slot);
+    kprintln(")");
+    kprint  ("  HHDM Offset Delta : +");
+    kprint_u32((u32)(st.hhdm_offset_delta >> 30));
+    kprintln(" GiB");
+    kprint  ("  Kernel Heap Delta : +");
+    kprint_u32((u32)(st.kernel_heap_delta >> 10));
+    kprintln(" KiB");
+    kprint  ("  Dynamic Mod Base  : 0x");
+    kprint_hex32((u32)(st.module_base >> 32));
+    kprint_hex32((u32)st.module_base);
+    kprintln("");
+    kprint  ("  Userland ASLR     : ");
+    kprintln(st.user_aslr_active ? "ENABLED (Stack, Mmap, Brk)" : "DISABLED");
+    kprint  ("  Shielded Pointers : ");
+    kprint_u32(st.total_randomizations);
+    kprintln("");
+    kprintln("=================================================================");
 }
 
 #include "linux_compat.h"
@@ -943,6 +977,8 @@ int kconsole_exec_command(const char* cmd_line, char* out_buf, u32 out_buf_len) 
         cmd_timetravel();
     } else if (str_cmp(cmd_line, "heal_test") == 0 || str_cmp(cmd_line, "heal") == 0) {
         cmd_heal_test();
+    } else if (str_cmp(cmd_line, "kaslr") == 0 || str_cmp(cmd_line, "aslr") == 0) {
+        cmd_kaslr();
     } else if (str_cmp(cmd_line, "linux") == 0 || str_cmp(cmd_line, "linux-info") == 0) {
         cmd_linux_info();
     } else if (str_cmp(cmd_line, "linux-test") == 0) {

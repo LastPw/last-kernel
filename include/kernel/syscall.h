@@ -1,3 +1,6 @@
+/*
+ * Author: Taha Vaziry
+ */
 #ifndef SYSCALL_H
 #define SYSCALL_H
 
@@ -59,10 +62,15 @@
 #define KSYSCALL_MPROTECT       52u
 #define KSYSCALL_CLOCK_GETTIME  53u
 #define KSYSCALL_NANOSLEEP      54u
+#define KSYSCALL_HTTP_FETCH     66u
+#define KSYSCALL_DRM_CREATE_BUFFER  67u
+#define KSYSCALL_DRM_PAGE_FLIP      68u
+#define KSYSCALL_DRM_BLIT           69u
+#define KSYSCALL_DRM_DESTROY_BUFFER 70u
 #define SYSCALL_WAIT_BLOCKED 0xFFFFFFFEu
 
 #define SYSCALL_POLICY_MAX_TASKS 4096u
-#define SYSCALL_POLICY_MAX_NR    64u
+#define SYSCALL_POLICY_MAX_NR    128u
 
 void syscall_init(void);
 void syscall_on_interrupt(registers_t* regs);

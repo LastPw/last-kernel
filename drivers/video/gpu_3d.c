@@ -1558,7 +1558,16 @@ void gpu_3d_draw_terrain_grid(i32 grid_w, i32 grid_h, i32 cell_size, i32 height_
 
 /* ─── Section 19: Hardware Texture Sampler & Box Mipmap Generator ────────── */
 
-static u32 s_mipmap_pyramid_mem[GPU_3D_MAX_TEXTURES][9][256 * 256];
+/* gpu_3d_generate_mipmaps() writes at most 8 downsampled levels (slot 8 of the
+   old [9][256*256] table was never touched).  Reserving a full 256x256 plane
+   per level wasted 4x the memory, so the levels are packed back to back:
+   128^2 + 64^2 + 32^2 + 16^2 + 8^2 + 4^2 + 2^2 + 1^2 words per texture. */
+#define GPU_3D_MAX_MIP_LEVELS 8u
+#define GPU_3D_MIPMAP_WORDS   21845u
+static u32 s_mipmap_pyramid_mem[GPU_3D_MAX_TEXTURES][GPU_3D_MIPMAP_WORDS];
+static const u32 s_mipmap_level_off[GPU_3D_MAX_MIP_LEVELS] = {
+    0u, 16384u, 20480u, 21504u, 21760u, 21824u, 21840u, 21844u
+};
 
 void gpu_3d_generate_mipmaps(u16 texture_id) {
     if (texture_id >= GPU_3D_MAX_TEXTURES) return;
@@ -1569,14 +1578,18 @@ void gpu_3d_generate_mipmaps(u16 texture_id) {
     u16 h = tex->height;
     u8 level = 0;
 
-    while (w > 1 && h > 1 && level < 8) {
+    /* The pyramid slots are sized for a 256x256 base; a larger texture would
+       run one level into the next. */
+    if (w > 256u || h > 256u) return;
+
+    while (w > 1 && h > 1 && level < GPU_3D_MAX_MIP_LEVELS) {
         u16 next_w = w / 2;
         u16 next_h = h / 2;
         if (next_w == 0) next_w = 1;
         if (next_h == 0) next_h = 1;
 
         const u32* src = tex->pixels[level];
-        u32* dst = s_mipmap_pyramid_mem[texture_id][level];
+        u32* dst = &s_mipmap_pyramid_mem[texture_id][s_mipmap_level_off[level]];
 
         /* 2x2 Box Filter Downsampling */
         for (u16 y = 0; y < next_h; y++) {

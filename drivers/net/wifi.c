@@ -392,6 +392,13 @@ wifi_state_t wifi_get_state(void) {
     return g_wifi_state;
 }
 
+int wifi_get_connected_ap(wifi_ap_t* out_ap) {
+    if (!out_ap) return -1;
+    if (g_wifi_state != WIFI_STATE_CONNECTED) return -2;
+    memcpy(out_ap, &g_connected_ap, sizeof(wifi_ap_t));
+    return 0;
+}
+
 int wifi_scan(wifi_ap_t* out_aps, u32 max_aps) {
     if (!out_aps) return -1;
     u32 count = (g_scan_ap_count < max_aps) ? g_scan_ap_count : max_aps;

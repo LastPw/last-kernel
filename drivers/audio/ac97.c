@@ -202,7 +202,7 @@ int ac97_play_pcm(const void* pcm_data, u32 len_bytes, u32 sample_rate, u8 chann
 }
 
 int ac97_beep(u16 freq_hz, u32 ms) {
-    static u8 tone[AC97_BUF_SAMPLES * 2u * AC97_BDL_ENTRIES];
+    static s16 tone[AC97_BUF_SAMPLES * AC97_BDL_ENTRIES];
     if (!freq_hz) freq_hz = 440u;
     if (ms < 10u) ms = 10u;
     if (ms > 1500u) ms = 1500u;
@@ -212,11 +212,28 @@ int ac97_beep(u16 freq_hz, u32 ms) {
     if (total_samples > AC97_BUF_SAMPLES * AC97_BDL_ENTRIES)
         total_samples = AC97_BUF_SAMPLES * AC97_BDL_ENTRIES;
 
+    u32 period = rate / freq_hz;
+    if (period < 2) period = 2;
+    u32 attack = total_samples / 10;
+    if (attack > 480) attack = 480; /* 10ms */
+    u32 release_start = (total_samples > 960) ? (total_samples - 960) : (total_samples / 2);
+
     for (u32 i = 0; i < total_samples; i++) {
-        /* cheap square wave -- audible and unambiguous */
-        u8 v = ((i * freq_hz) / rate) & 1u ? 0x50u : 0xB0u;
-        tone[i * 2u + 0u] = v;
-        tone[i * 2u + 1u] = v;
+        u32 ph = i % period;
+        i32 wave;
+        if (ph < period / 2) {
+            wave = -18000 + (i32)((ph * 36000ull) / (period / 2));
+        } else {
+            wave = 18000 - (i32)(((ph - period / 2) * 36000ull) / (period / 2));
+        }
+
+        if (i < attack) {
+            wave = (i32)((wave * (s64)i) / attack);
+        } else if (i > release_start) {
+            u32 rem = total_samples - i;
+            wave = (i32)((wave * (s64)rem) / (total_samples - release_start));
+        }
+        tone[i] = (s16)wave;
     }
     return ac97_play_pcm(tone, total_samples * 2u, rate, 1u);
 }

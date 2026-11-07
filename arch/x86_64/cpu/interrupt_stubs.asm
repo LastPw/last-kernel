@@ -217,13 +217,20 @@ IRQ 15, 47
 
 global x86_64_syscall_entry
 extern x86_64_syscall_handler
+extern gdt_syscall_kernel_rsp
 
 x86_64_syscall_entry:
+    ; SYSCALL changes CPL but not RSP.  Preserve the user stack and enter the
+    ; kernel on its own stack, as an interrupt through TSS.rsp0 already does.
+    push r15
+    mov r15, rsp
+    mov rsp, [rel gdt_syscall_kernel_rsp]
+    push r15
+
     ; Hardware 'syscall' saves user RIP in RCX and user RFLAGS in R11
     push rcx
     push r11
     push rbp
-    push r15
     push r14
     push r13
     push r12
@@ -239,18 +246,21 @@ x86_64_syscall_entry:
     mov rsi, rdi   ; 2nd argument (a1)
     mov rdi, rax   ; 1st argument (nr)
 
+    sub rsp, 8     ; SysV call-site alignment
     call x86_64_syscall_handler
-    add rsp, 8     ; drop 7th argument
+    add rsp, 16    ; drop alignment padding and the 7th argument
 
     ; Return value in RAX
     pop rbx
     pop r12
     pop r13
     pop r14
-    pop r15
     pop rbp
     pop r11
     pop rcx
+    pop r15
+    mov rsp, r15
+    pop r15
 
     ; Fast return to Ring 3 (64-bit operand size for SYSRET)
     o64 sysret

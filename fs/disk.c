@@ -334,7 +334,7 @@ static int ata_poll(u16 io_base, u8 require_drq) {
     return -1;
 }
 
-static int ata_identify_primary(u32* out_sectors) {
+static int ata_identify_primary(u32* out_sectors, char* out_model) {
     u16 io = ATA_IO_BASE;
     ata_reset_channel(io);
     outb(io + ATA_REG_HDDEVSEL, 0xA0u);
@@ -364,6 +364,20 @@ static int ata_identify_primary(u32* out_sectors) {
     if (ata_poll(io, 0u) != 0) {
         serial_writeln("[LastOS] ATA identify completion failed");
         return -1;
+    }
+
+    if (out_model) {
+        char* m = out_model;
+        for (u32 i = 0u; i < 20u; i++) {
+            u16 w = id[27u + i];
+            *m++ = (char)((w >> 8u) & 0xFFu);
+            *m++ = (char)(w & 0xFFu);
+        }
+        *m = '\0';
+        while (m > out_model && (*(m - 1) == ' ' || *(m - 1) == '\0')) {
+            m--;
+            *m = '\0';
+        }
     }
 
     u32 lba28 = ((u32)id[61] << 16) | (u32)id[60];
@@ -512,17 +526,21 @@ void disk_init(void) {
         g_dev[0].sectors = nvme_sectors;
         g_dev[0].data = 0;
         g_dev[0].info.persistent = 1u;
+        str_cpy(g_dev[0].info.model, "PCIe NVMe Solid-State Drive");
     } else if (virtio_blk_init() == 0 && virtio_blk_ready() && virtio_blk_sector_count() > 8192u) {
         virtio_sectors = virtio_blk_sector_count();
         g_dev[0].backend = DISK_BACKEND_VIRTIO;
         g_dev[0].sectors = virtio_sectors;
         g_dev[0].data = 0;
         g_dev[0].info.persistent = 1u;
+        str_cpy(g_dev[0].info.model, "VirtIO Block Device");
     } else {
         u32 ata_sectors = 0u;
+        char ata_model[48];
+        memset(ata_model, 0, sizeof(ata_model));
         int ata_ok = -1;
         for (u32 attempt = 0u; attempt < ATA_IDENTIFY_ATTEMPTS; attempt++) {
-            if (ata_identify_primary(&ata_sectors) == 0 && ata_sectors > 8192u) {
+            if (ata_identify_primary(&ata_sectors, ata_model) == 0 && ata_sectors > 8192u) {
                 ata_ok = 0;
                 break;
             }
@@ -533,8 +551,14 @@ void disk_init(void) {
             g_dev[0].sectors = ata_sectors;
             g_dev[0].data = 0;
             g_dev[0].info.persistent = 1u;
+            if (ata_model[0] != '\0') {
+                str_cpy(g_dev[0].info.model, ata_model);
+            } else {
+                str_cpy(g_dev[0].info.model, "ATA/AHCI Storage Device");
+            }
         } else {
             g_dev[0].backend = DISK_BACKEND_RAM;
+            str_cpy(g_dev[0].info.model, "Volatile RAM-Disk Storage");
             if (!g_disk_mem) {
                 g_disk_mem = heap_alloc(DISK_RAM_FALLBACK_BYTES);
                 if (g_disk_mem) memset(g_disk_mem, 0, DISK_RAM_FALLBACK_BYTES);
@@ -576,6 +600,7 @@ void disk_init(void) {
         usb->info.health_score = 100u;
         usb->info.persistent = 1u;
         usb->info.backend = (u8)usb->backend;
+        str_cpy(usb->info.model, "USB Flash Storage Device");
         usb->part_start_lba = 0u;
         usb->part_total_lba = usb->sectors;
         usb->part_fs = DISK_FS_LASTFS;

@@ -70,6 +70,9 @@ void gdt_set_kernel_stack(u64 rsp0);
 static gdt_entry_t gdt[7];
 static gdt_ptr_t gp;
 static tss64_t tss;
+/* SYSCALL does not load RSP from the TSS, so its assembly entry reads the same
+   kernel stack pointer explicitly instead of running ring-0 on a user stack. */
+u64 gdt_syscall_kernel_rsp = 0u;
 
 static void gdt_set_gate(int num, u32 base, u32 limit, u8 access, u8 gran) {
     if (num < 0 || num >= (int)(sizeof(gdt) / sizeof(gdt[0]))) {
@@ -95,6 +98,7 @@ void gdt_init(void) {
        kernel_entry.asm (512 KiB, well past .bss).  The old 0x03E00000 low
        physical address predates the higher-half move. */
     tss.rsp0 = (u64)(uintptr_t)boot_stack_top;
+    gdt_syscall_kernel_rsp = tss.rsp0;
 
     memset(gdt, 0, sizeof(gdt));
 
@@ -154,5 +158,6 @@ void gdt_init(void) {
 
 void gdt_set_kernel_stack(u64 rsp0) {
     tss.rsp0 = rsp0;
+    gdt_syscall_kernel_rsp = rsp0;
 }
 void* gdt_descriptor(void) { return (void*)&gp; }

@@ -26,8 +26,10 @@ int udp_raw_send(u32 src_ip, u32 dst_ip, u16 src_port, u16 dst_port, const u8* p
     udp->dst_port = ip_htons(dst_port);
     udp->len = ip_htons((u16)(sizeof(udp_header_t) + payload_len));
     udp->checksum = 0;
-    udp->checksum = ip_htons(net_udp_checksum(src_ip, dst_ip, (const u8*)udp,
-                                              (u16)(sizeof(udp_header_t) + payload_len)));
+    if (src_ip != 0u) {
+        udp->checksum = ip_htons(net_udp_checksum(src_ip, dst_ip, (const u8*)udp,
+                                                  (u16)(sizeof(udp_header_t) + payload_len)));
+    }
 
     return ethernet_send_frame(frame, (u16)(sizeof(eth_header_t) + sizeof(ipv4_header_t) +
                                              sizeof(udp_header_t) + payload_len));

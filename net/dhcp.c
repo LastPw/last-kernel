@@ -1,4 +1,5 @@
 #include "dhcp.h"
+#include "dns.h"
 #include "netstack.h"
 #include "udp_raw.h"
 #include "ethernet.h"
@@ -50,6 +51,12 @@ static int dhcp_send(u32 xid, u8 message, u32 requested, u32 server) {
         at = add_option(packet, at, DHCP_OPT_SERVER_ID, ip, 4u);
     }
     {
+        u8 cid[7];
+        cid[0] = 1u; /* Ethernet */
+        memcpy(cid + 1, mac, 6);
+        at = add_option(packet, at, 61u, cid, 7u);
+    }
+    {
         const u8 params[] = { DHCP_OPT_SUBNET, DHCP_OPT_ROUTER, DHCP_OPT_DNS };
         at = add_option(packet, at, DHCP_OPT_PARAM_LIST, params, sizeof(params));
     }
@@ -78,9 +85,13 @@ static int parse_options(const u8* packet, u32 len, u8 wanted, u8* out, u8 out_c
 
 static int dhcp_wait(u32 sock, u8* out, u32 out_cap, u32 timeout, u32 xid, u8 type,
                      u32* offered, u32* server, u32* mask, u32* gw, u32* dns) {
-    u32 deadline = timer_ticks() + timeout;
-    u32 guard = (timeout ? timeout : 200u) * 10000u;
-    while (guard-- != 0u && (i32)(timer_ticks() - deadline) < 0) {
+    u32 start_ticks = timer_ticks();
+    u32 deadline = start_ticks + timeout;
+    u32 guard = (timeout ? timeout : 200u) * 500000u;
+    while (guard-- != 0u) {
+        if (timeout > 0 && timer_ticks() != start_ticks && (i32)(timer_ticks() - deadline) >= 0) {
+            break;
+        }
         u32 src = 0u;
         u16 port = 0u;
         (void)nic_poll(16u);
@@ -140,6 +151,9 @@ int dhcp_configure(u32 timeout_ticks) {
     netstack_set_local(offered, mask, gw);
     g_server_ip = server;
     g_dns_ip = dns;
+    if (dns != 0u) {
+        dns_set_server(0, dns);
+    }
     g_dhcp_ready = 1u;
     return 0;
 }

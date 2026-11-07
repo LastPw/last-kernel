@@ -48,15 +48,24 @@ _start:
     ; ─────────────────────────────────────────────────────────────────────────
     ; Construct Early 4-Level Paging (PML4 -> PDPT -> 4x PDs -> 4 GiB @ 2MiB pages)
     ; ─────────────────────────────────────────────────────────────────────────
-    ; PML4[0]   -> Identity map 0..4 GiB
-    ; PML4[256] -> HHDM map (0xFFFF800000000000) 0..4 GiB
-    ; PML4[511] -> Higher Half map (0xFFFFFFFF80000000)
+    ; PML4[0]        -> Identity map 0..4 GiB
+    ; PML4[256..271] -> KASLR HHDM maps (0xFFFF800000000000 + slot * 512 GiB)
+    ; PML4[511]      -> Higher Half map (0xFFFFFFFF80000000)
 
     mov eax, early_pdpt
     or eax, 0x03                            ; Present + Writable
     mov [early_pml4 + 0], eax               ; PML4[0]
-    mov [early_pml4 + 256 * 8], eax         ; PML4[256] (0xFFFF800000000000 HHDM)
     mov [early_pml4 + 511 * 8], eax         ; PML4[511] (0xFFFFFFFF80000000)
+
+    ; Map 16 KASLR HHDM slots (PML4[256..271])
+    mov edi, early_pml4 + 256 * 8
+    mov ecx, 16
+.map_hhdm_slots:
+    mov [edi], eax
+    mov dword [edi + 4], 0
+    add edi, 8
+    dec ecx
+    jnz .map_hhdm_slots
 
     ; Map 4 Page Directories into PDPT (covers 4 GiB)
     mov eax, early_pd0

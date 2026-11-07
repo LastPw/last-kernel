@@ -4,11 +4,10 @@
 #include "bootinfo.h"
 #include "serial.h"
 
-#define PAGE_ENTRIES 1024u
-/* HW-max: 256 kernel page tables + 256 user address spaces; the old
-   64/32/16 pool crowded 2-4 GiB machines. */
-#define PAGE_TABLE_POOL 128u
-#define USER_SPACE_COUNT 8u   /* concurrent user spaces */
+#define PAGE_ENTRIES 512u   /* Standard x86_64 4 KiB table: 512 x 8-byte entries */
+/* HW-tuned: 256 kernel page tables + 32 concurrent user address spaces */
+#define PAGE_TABLE_POOL 256u
+#define USER_SPACE_COUNT 32u   /* concurrent user address spaces (1..31) */
 #define USER_SPACE_TABLE_POOL 32u /* PT pages/space: 512 MiB VA @2M pages */
 #define PAGE_SIZE 4096u
 
@@ -187,15 +186,6 @@ static int map_leaf4k(u64 va, u64 pa, u32 flags) {
 
     pt[l1] = pa | (flags & 0xFFFu) | PAGE_FLAG_PRESENT |
              ((flags & PAGE_FLAG_NX) ? PAGE_FLAG_NX : 0ULL);
-    if (va >= 0x1000000000ull) {
-        serial_write("[pg] map4k va=0x");
-        serial_write_hex((u32)(va >> 12));
-        serial_write(" flags=0x");
-        serial_write_hex(flags);
-        serial_write(" cr3=0x");
-        serial_write_hex((u32)(paging_cr3() >> 12));
-        serial_putc('\n');
-    }
     __asm__ __volatile__("invlpg (%0)" : : "r"(va) : "memory");
     return 0;
 }
@@ -222,21 +212,21 @@ u64 paging_virt_to_phys(u64 virt) {
     u32 l4 = pml4_index(virt);
     if ((pm[l4] & PAGE_FLAG_PRESENT) == 0u) return 0;
     u64 l3e = pm[l4] & 0x000FFFFFFFFFF000ull;
-    if (pm[l4] & PAGE_FLAG_PS) return (l3e & 0x000FFFFFC0000000ull);
+    if (pm[l4] & PAGE_FLAG_PS) return (l3e & 0x000FFFFFC0000000ull) | (virt & 0x3FFFFFFFull);
     u64* pdpt = (u64*)virt_of_phys(l3e);
     u32 l3 = pdpt_index(virt);
     if ((pdpt[l3] & PAGE_FLAG_PRESENT) == 0u) return 0;
     u64 l2e = pdpt[l3] & 0x000FFFFFFFFFF000ull;
-    if (pdpt[l3] & PAGE_FLAG_PS) return (l2e & 0x000FFFFFFFC00000ull);
+    if (pdpt[l3] & PAGE_FLAG_PS) return (l2e & 0x000FFFFFFFC00000ull) | (virt & 0x1FFFFFull);
     u64* pd = (u64*)virt_of_phys(l2e);
     u32 l2 = pd_index(virt);
     if ((pd[l2] & PAGE_FLAG_PRESENT) == 0u) return 0;
     u64 l1e = pd[l2] & 0x000FFFFFFFFFF000ull;
-    if (pd[l2] & PAGE_FLAG_PS) return (l1e & 0x000FFFFFFFE00000ull);
+    if (pd[l2] & PAGE_FLAG_PS) return (l1e & 0x000FFFFFFFE00000ull) | (virt & 0x1FFFFFull);
     u64* pt = (u64*)virt_of_phys(l1e);
     u32 l1 = pt_index(virt);
     if ((pt[l1] & PAGE_FLAG_PRESENT) == 0u) return 0;
-    return (pt[l1] & 0x000FFFFFFFFFF000ull);
+    return (pt[l1] & 0x000FFFFFFFFFF000ull) | (virt & 0xFFFull);
 }
 
 int paging_is_mapped(u64 va) {
@@ -293,58 +283,62 @@ u64 paging_get_page_frame(u64 virt_addr) {
 u32 paging_get_page_flags(u64 va) {
     u64* pml4 = kernel_pml4();
     u32 l4 = pml4_index(va);
-    if (va >= USER_VIRT_BASE && va < (USER_VIRT_BASE + 0x100000000ull)) {
-        serial_write("[gpf] va=0x");
-        serial_write_hex((u32)(va >> 12));
-        serial_write(" l4=0x");
-        serial_write_hex(l4);
-        serial_write(" pm4e=0x");
-        serial_write_hex((u32)(pml4[l4]));
-        serial_write(" hhdm=0x");
-        serial_write_hex((u32)(g_paging_hhdm_offset >> 32));
-        serial_write_hex((u32)g_paging_hhdm_offset);
-        serial_write(" cr3=0x");
-        serial_write_hex((u32)(paging_cr3() >> 12));
-        serial_putc('\n');
-    }
     if ((pml4[l4] & PAGE_FLAG_PRESENT) == 0u) return 0;
     u64* pdpt = (u64*)virt_of_phys(pml4[l4] & 0x000FFFFFFFFFF000ull);
     u32 l3 = pdpt_index(va);
-    if (va >= USER_VIRT_BASE && va < (USER_VIRT_BASE + 0x100000000ull)) {
-        serial_write("[gpf2] l3=0x");
-        serial_write_hex(l3);
-        serial_write(" pdpte=0x");
-        serial_write_hex((u32)(pdpt[l3]));
-        serial_putc('\n');
-    }
     if ((pdpt[l3] & PAGE_FLAG_PRESENT) == 0u) return 0;
     if (pdpt[l3] & PAGE_FLAG_PS) return (u32)(pdpt[l3] & 0xFFFu);
     u64* pd = (u64*)virt_of_phys(pdpt[l3] & 0x000FFFFFFFFFF000ull);
     u32 l2 = pd_index(va);
-    if (va >= USER_VIRT_BASE && va < (USER_VIRT_BASE + 0x100000000ull)) {
-        serial_write("[gpf3] l2=0x");
-        serial_write_hex(l2);
-        serial_write(" pde=0x");
-        serial_write_hex((u32)(pd[l2]));
-        serial_write(" pd_v=0x");
-        serial_write_hex((u32)(((u64)(uintptr_t)pd) >> 12));
-        serial_putc('\n');
-    }
     if ((pd[l2] & PAGE_FLAG_PRESENT) == 0u) return 0;
     if (pd[l2] & PAGE_FLAG_PS) return (u32)(pd[l2] & 0xFFFu);
     u64* pt = (u64*)virt_of_phys(pd[l2] & 0x000FFFFFFFFFF000ull);
     u32 l1 = pt_index(va);
-    if (va >= USER_VIRT_BASE && va < (USER_VIRT_BASE + 0x100000000ull)) {
-        serial_write("[gpf4] l1=0x");
-        serial_write_hex(l1);
-        serial_write(" pte=0x");
-        serial_write_hex((u32)(pt[l1]));
-        serial_write(" pt_v=0x");
-        serial_write_hex((u32)(((u64)(uintptr_t)pt) >> 12));
-        serial_putc('\n');
-    }
     if ((pt[l1] & PAGE_FLAG_PRESENT) == 0u) return 0;
     return (u32)(pt[l1] & 0xFFFu);
+}
+
+/* Walk the tables that CR3 currently names (kernel_pml4() is the boot PML4 and
+   does not see per-task user images) and report both the frame and its flags. */
+u64 paging_walk_current(u64 va, u32* flags_out) {
+    u64* pm = (u64*)virt_of_phys(paging_cr3());    u64 l3e;
+    u32 l4 = pml4_index(va);
+    if (flags_out) *flags_out = 0u;
+    if (pm == 0u || (pm[l4] & PAGE_FLAG_PRESENT) == 0u) return 0u;
+    l3e = pm[l4] & 0x000FFFFFFFFFF000ull;
+    if (pm[l4] & PAGE_FLAG_PS) {
+        if (flags_out) *flags_out = (u32)(pm[l4] & 0xFFFu);
+        return (l3e & 0x000FFFFFC0000000ull) | (va & 0x3FFFFFFFull);
+    }
+    {
+        u64* pdpt = (u64*)virt_of_phys(l3e);
+        u64 l2e;
+        u32 l3 = pdpt_index(va);
+        if ((pdpt[l3] & PAGE_FLAG_PRESENT) == 0u) return 0u;
+        l2e = pdpt[l3] & 0x000FFFFFFFFFF000ull;
+        if (pdpt[l3] & PAGE_FLAG_PS) {
+            if (flags_out) *flags_out = (u32)(pdpt[l3] & 0xFFFu);
+            return (l2e & 0x000FFFFFFFE00000ull) | (va & 0x1FFFFFull);
+        }
+        {
+            u64* pd = (u64*)virt_of_phys(l2e);
+            u64 l1e;
+            u32 l2 = pd_index(va);
+            if ((pd[l2] & PAGE_FLAG_PRESENT) == 0u) return 0u;
+            l1e = pd[l2] & 0x000FFFFFFFFFF000ull;
+            if (pd[l2] & PAGE_FLAG_PS) {
+                if (flags_out) *flags_out = (u32)(pd[l2] & 0xFFFu);
+                return (l1e & 0x000FFFFFFFE00000ull) | (va & 0x1FFFFFull);
+            }
+            {
+                u64* pt = (u64*)virt_of_phys(l1e);
+                u32 l1 = pt_index(va);
+                if ((pt[l1] & PAGE_FLAG_PRESENT) == 0u) return 0u;
+                if (flags_out) *flags_out = (u32)(pt[l1] & 0xFFFu);
+                return (pt[l1] & 0x000FFFFFFFFFF000ull) | (va & 0xFFFull);
+            }
+        }
+    }
 }
 
 void paging_set_page_flags(u64 virt_addr, u32 flags) {
@@ -409,9 +403,10 @@ int paging_validate_user_ptr(u64 addr, u64 len, int write_access) {
     u64 page = addr & ~0xFFFull;
     while (page <= end) {
         u32 f = paging_get_page_flags(page);
-        if ((f & PAGE_FLAG_PRESENT) != 0u) {
-            if (write_access && (f & PAGE_FLAG_RW) == 0u) return 0;
-        }
+        /* The page must be present and mapped for Ring-3 user access */
+        if ((f & PAGE_FLAG_PRESENT) == 0u) return 0;
+        if ((f & PAGE_FLAG_USER) == 0u) return 0;
+        if (write_access && (f & PAGE_FLAG_RW) == 0u) return 0;
         if (page > end - PAGE_SIZE) break;
         page += PAGE_SIZE;
     }
@@ -615,26 +610,52 @@ void paging_init(void) {
     paging_pku_init();
 }
 
-/* ── x86_64 Hardware Protection Keys (PKEYs / PKU) ── */
+/* ── x86_64 Hardware Protection Keys (PKEYs / PKU + PKS) ── */
 extern u32 pku_is_supported(void);
+extern u32 pks_is_supported(void);
 extern void pku_enable_cr4(void);
 extern u32 pku_read_pkru(void);
 extern void pku_write_pkru(u32 val);
+extern u64 pks_read_pkrs(void);
+extern void pks_write_pkrs(u32 val);
 
-static u8 s_pku_supported = 0;
+static u8 s_pku_supported = 0;   /* user-space PKU (CR4.PKE + PKRU)  */
+static u8 s_pks_supported = 0;   /* supervisor PKS (CR4.PKS + PKRS)  */
 
 u8 paging_pku_supported(void) {
     return s_pku_supported;
 }
 
+u8 paging_pks_supported(void) {
+    return s_pks_supported;
+}
+
+/* PKRU bits 2i/2i+1: AD/WD for user key i. PKRS uses the same per-key
+   2-bit layout in IA32_PKRS (MSR 0x652) for supervisor pages. */
+#define PKEY_RIGHTS(key, ad, wd)   (((u32)(ad) << ((key) * 2u)) | ((u32)(wd) << ((key) * 2u + 1u)))
+
 void paging_pku_init(void) {
     if (pku_is_supported()) {
-        pku_enable_cr4();
-        pku_write_pkru(0x00000000u);
+        pku_enable_cr4();          /* sets CR4.PKE; also sets CR4.PKS below */
+        pku_write_pkru(0x00000000u); /* user keys unrestricted by default */
         s_pku_supported = 1;
         serial_write("[PAGING] Hardware Memory Protection Keys (PKU/PKEYs) Enabled in CR4\n");
     } else {
         serial_write("[PAGING] Hardware PKU not supported by CPU, falling back to software domain barriers\n");
+    }
+
+    if (pks_is_supported()) {
+        if (!s_pku_supported) {
+            /* CR4.PKS still needs to be set even when PKU is absent. */
+            pku_enable_cr4();
+        }
+        /* Key 0 (kernel core) must stay fully accessible; all other
+           supervisor keys are locked down until a domain is entered. */
+        pks_write_pkrs(PKEY_RIGHTS(0, 0, 0) | 0x55555554u);
+        s_pks_supported = 1;
+        serial_write("[PAGING] Supervisor Protection Keys (PKS/IA32_PKRS) Enabled for Ring-0 Domains\n");
+    } else {
+        serial_write("[PAGING] Hardware PKS not supported by CPU, Ring-0 domains fall back to software barriers\n");
     }
 }
 
@@ -667,19 +688,60 @@ int paging_set_page_domain(u64 virt_addr, u32 domain_id) {
 
 int paging_set_range_domain(u64 virt_addr, u64 bytes, u32 domain_id) {
     u64 off = 0;
+    int failures = 0;
     while (off < bytes) {
-        paging_set_page_domain(virt_addr + off, domain_id);
+        if (paging_set_page_domain(virt_addr + off, domain_id) != 0) failures++;
         off += 4096u;
     }
-    return 0;
+    return failures ? -1 : 0;
+}
+
+/* Note: x86_64 supervisor PTEs do not cache protection-key bits in the TLB
+   for PKS when the PTE key bits are modified while the page is present, so
+   we must issue an INVLPG for each re-tagged page to guarantee fresh
+   interpretation of the key field.  set_page_domain callers that hot-retag
+   large ranges should batch, but correctness demands the flush. */
+static void paging_invalidate_domain_tag(u64 virt_addr) {
+    u64 va = virt_addr & ~0xFFFull;
+    __asm__ __volatile__("invlpg (%0)" : : "r"(va) : "memory");
+}
+
+int paging_set_page_domain_flush(u64 virt_addr, u32 domain_id) {
+    int res = paging_set_page_domain(virt_addr, domain_id);
+    if (res == 0) paging_invalidate_domain_tag(virt_addr);
+    return res;
+}
+
+int paging_set_range_domain_flush(u64 virt_addr, u64 bytes, u32 domain_id) {
+    u64 off = 0;
+    int failures = 0;
+    while (off < bytes) {
+        if (paging_set_page_domain_flush(virt_addr + off, domain_id) != 0) failures++;
+        off += 4096u;
+    }
+    return failures ? -1 : 0;
 }
 
 void paging_set_domain_rights(u32 domain_id, u8 disable_access, u8 disable_write) {
-    if (!s_pku_supported || domain_id >= 16) return;
-    u32 pkru = pku_read_pkru();
-    u32 shift = domain_id * 2u;
-    pkru &= ~(3u << shift);
-    if (disable_access) pkru |= (1u << shift);
-    if (disable_write)  pkru |= (2u << shift);
-    pku_write_pkru(pkru);
+    if (domain_id >= 16) return;
+
+    if (s_pks_supported) {
+        /* Supervisor pages (Ring-0 micro-domains): IA32_PKRS MSR. */
+        u64 pkrs = pks_read_pkrs();
+        u32 val = (u32)pkrs;
+        u32 shift = domain_id * 2u;
+        val &= ~(3u << shift);
+        if (disable_access) val |= (1u << shift);
+        if (disable_write)  val |= (2u << shift);
+        pks_write_pkrs(val);
+    }
+    if (s_pku_supported) {
+        /* User pages: keep the legacy PKRU path working as before. */
+        u32 pkru = pku_read_pkru();
+        u32 shift = domain_id * 2u;
+        pkru &= ~(3u << shift);
+        if (disable_access) pkru |= (1u << shift);
+        if (disable_write)  pkru |= (2u << shift);
+        pku_write_pkru(pkru);
+    }
 }

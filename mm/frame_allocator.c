@@ -191,6 +191,7 @@ static void free_block_raw(u32 idx, u8 order) {
 
 void frame_allocator_init(u64 ram_bytes) {
     (void)ram_bytes; /* capacity comes from the bootloader region table */
+    spinlock_init(&g_frame_lock);
 
     /* 1) Collect pool-eligible regions (Limine-fork types: usable=0,
           kernel-and-modules=6), clip to [1 MiB, FA_MAX_SPAN], sort by base. */
@@ -408,10 +409,8 @@ void frame_allocator_init(u64 ram_bytes) {
 
 /* ── allocation core ──────────────────────────────────────────────────── */
 
-static void* alloc_from(u8 order, int require_dma32) {
+static void* alloc_from_locked(u8 order, int require_dma32) {
     if (order > MAX_ORDER) return 0;
-
-    u32 flags = spinlock_lock_irqsave(&g_frame_lock);
 
     u8 cur_order = order;
     u32 idx = INVALID_IDX;
@@ -431,12 +430,6 @@ static void* alloc_from(u8 order, int require_dma32) {
     }
 
     if (idx == INVALID_IDX || cur_order > MAX_ORDER) {
-        spinlock_unlock_irqrestore(&g_frame_lock, flags);
-        (void)memory_runtime_govern_pressure(
-            total_frames_count * FRAME_SIZE,
-            used_frames_count * FRAME_SIZE,
-            frame_fragmentation_score()
-        );
         return 0;
     }
 
@@ -463,8 +456,23 @@ static void* alloc_from(u8 order, int require_dma32) {
     if (used_frames_count > total_frames_count) {
         used_frames_count = total_frames_count;
     }
-    void* out = pfn_to_va(idx);
+    return pfn_to_va(idx);
+}
+
+static void* alloc_from(u8 order, int require_dma32) {
+    if (order > MAX_ORDER) return 0;
+    u32 flags = spinlock_lock_irqsave(&g_frame_lock);
+    void* out = alloc_from_locked(order, require_dma32);
     spinlock_unlock_irqrestore(&g_frame_lock, flags);
+
+    if (!out) {
+        (void)memory_runtime_govern_pressure(
+            total_frames_count * FRAME_SIZE,
+            used_frames_count * FRAME_SIZE,
+            frame_fragmentation_score()
+        );
+        return 0;
+    }
     memory_runtime_on_alloc(out, order_size(order) * FRAME_SIZE, 0u, MEMRT_TAG_CACHE);
     return out;
 }
@@ -509,11 +517,15 @@ void* frame_alloc(void) {
     /* Slow path: batch refill 32 frames under a single spinlock acquisition */
     u32 flags = spinlock_lock_irqsave(&g_frame_lock);
     for (u32 i = 0; i < 32u; i++) {
-        void* f = alloc_from(0u, 0);
+        void* f = alloc_from_locked(0u, 0);
         if (!f) break;
         mag->frames[mag->count++] = f;
     }
     spinlock_unlock_irqrestore(&g_frame_lock, flags);
+
+    for (u32 i = 0; i < mag->count; i++) {
+        memory_runtime_on_alloc(mag->frames[i], FRAME_SIZE, 0u, MEMRT_TAG_CACHE);
+    }
 
     if (mag->count > 0) {
         mag->count--;

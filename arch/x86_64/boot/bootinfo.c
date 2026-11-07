@@ -3,6 +3,7 @@
 #include "gfx.h"
 #include "serial.h"
 #include "string.h"
+#include "security/kaslr.h"
 
 /* ── Global boot geometry consumed by the kernel ─────────────────────────── */
 
@@ -153,6 +154,10 @@ void bootinfo_init(void* mbi_addr) {
         g_boot_region_count = 1u;
         g_memmap_total_low = g_boot_regions[0].len;
     }
+
+    /* Initialize Kernel Address Space Layout Randomization (KASLR) */
+    kaslr_early_init(g_cmdline_buf);
+    g_hhdm_offset = kaslr_randomize_hhdm(g_hhdm_offset);
 
     serial_writeln("[bootinfo] Pulse Loader Multiboot2 MBI parsed successfully.");
 }
