@@ -3,6 +3,10 @@
 #include "string.h"
 #include "spinlock.h"
 
+#ifndef HOST_TEST
+#include "usb.h"
+#endif
+
 /*
  * Industrial-Grade USB Mass Storage (BOT & SCSI SPC-4 / SBC-3) Subsystem Driver
  *
@@ -151,7 +155,21 @@ int usb_mass_read_capacity(u64* out_sector_count, u32* out_sector_size) {
 }
 
 int usb_mass_read_sector(u32 lba, u8* buffer) {
-    if (!g_usb_dev.is_attached || !buffer) return -1;
+    if (!buffer) return -1;
+
+#ifndef HOST_TEST
+    if (usb_mass_storage_ready()) {
+        int rc = usb_mass_storage_read_sector(lba, buffer);
+        if (rc == 0) {
+            spinlock_lock(&g_usb_mass_lock);
+            g_total_bytes_read += 512;
+            spinlock_unlock(&g_usb_mass_lock);
+            return 0;
+        }
+    }
+#endif
+
+    if (!g_usb_dev.is_attached) return -1;
 
     spinlock_lock(&g_usb_mass_lock);
 
@@ -177,7 +195,21 @@ int usb_mass_read_sector(u32 lba, u8* buffer) {
 }
 
 int usb_mass_write_sector(u32 lba, const u8* buffer) {
-    if (!g_usb_dev.is_attached || !buffer) return -1;
+    if (!buffer) return -1;
+
+#ifndef HOST_TEST
+    if (usb_mass_storage_ready()) {
+        int rc = usb_mass_storage_write_sector(lba, buffer);
+        if (rc == 0) {
+            spinlock_lock(&g_usb_mass_lock);
+            g_total_bytes_written += 512;
+            spinlock_unlock(&g_usb_mass_lock);
+            return 0;
+        }
+    }
+#endif
+
+    if (!g_usb_dev.is_attached) return -1;
 
     spinlock_lock(&g_usb_mass_lock);
 
